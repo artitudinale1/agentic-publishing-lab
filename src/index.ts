@@ -88,6 +88,9 @@ async function main(): Promise<void> {
 
   const result = await runExperiment({ client, model: config.model, prompt });
 
+  console.log(
+    `[result] status=${result.status} incomplete_reason=${result.incompleteReason ?? "none"}`,
+  );
   console.log("");
   console.log(result.finalText);
 }

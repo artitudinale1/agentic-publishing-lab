@@ -1,12 +1,13 @@
 import type OpenAI from "openai";
 import { toResponseInputItems } from "openai/lib/responses/ResponseInputItems";
-import { findArticleTool, runFindArticleCall } from "./findArticleTool";
+import { createCatalog } from "./articles";
+import { articleTools, runToolCall } from "./tools";
 
 /** Hard stop so a tool loop cannot keep calling the model. */
-export const MAX_MODEL_CALLS = 3;
+export const MAX_MODEL_CALLS = 5;
 
-/** Visible reply plus tool-call JSON. Kept small on purpose. */
-export const MAX_OUTPUT_TOKENS = 256;
+/** Conservative cap for each model response. */
+export const MAX_OUTPUT_TOKENS = 512;
 
 export type ModelClient = {
   responses: {
@@ -22,15 +23,18 @@ export type ExperimentResult = {
   outputTokens: number;
   finalText: string;
   stoppedAtCallLimit: boolean;
+  status: "completed" | "incomplete";
+  incompleteReason: string | null;
 };
 
 type Log = (line: string) => void;
 
 const INSTRUCTIONS = [
-  "You answer questions about a small mock article catalog.",
-  "Call findArticle whenever the user asks about an article.",
-  "Use only the tool result. Do not invent articles.",
-  "If the tool says the article is missing or the arguments are invalid, say that plainly.",
+  "You help with a small in-memory article catalog.",
+  "You can call findArticle, createDraft, and updateDraft.",
+  "Choose which tools to call and in which order.",
+  "Use only tool results. Do not invent catalog entries.",
+  "If a tool reports an error, a duplicate slug, a missing article, or a published article, say that plainly.",
 ].join(" ");
 
 function outputText(response: OpenAI.Responses.Response): string {
@@ -66,6 +70,7 @@ export async function runExperiment(options: {
   log?: Log;
 }): Promise<ExperimentResult> {
   const log = options.log ?? ((line: string) => console.log(line));
+  const catalog = createCatalog();
   const input: OpenAI.Responses.ResponseInput = [
     { role: "user", content: options.prompt },
   ];
@@ -80,7 +85,7 @@ export async function runExperiment(options: {
       model: options.model,
       instructions: INSTRUCTIONS,
       input,
-      tools: [findArticleTool],
+      tools: articleTools,
       tool_choice: "auto",
       parallel_tool_calls: false,
       max_output_tokens: MAX_OUTPUT_TOKENS,
@@ -97,11 +102,33 @@ export async function runExperiment(options: {
     log(`[api] model=${returnedModel || "unavailable"}`);
     log(`[api] input_tokens=${usedInput} output_tokens=${usedOutput}`);
 
-    if (response.status === "incomplete") {
-      log(`[api] incomplete reason=${response.incomplete_details?.reason ?? "unknown"}`);
-    }
-
     const toolCalls = response.output.filter((item) => item.type === "function_call");
+
+    if (response.status === "incomplete") {
+      const reason = response.incomplete_details?.reason ?? "unknown";
+      log(`[api] status=incomplete reason=${reason}`);
+
+      for (const toolCall of toolCalls) {
+        log(
+          `[tool] request name=${toolCall.name} call_id=${toolCall.call_id} arguments=${toolCall.arguments}`,
+        );
+        log(`[incomplete] did not execute call_id=${toolCall.call_id}`);
+      }
+
+      finalText = outputText(response);
+      log(
+        `[usage] api_calls=${callNumber} input_tokens=${inputTokens} output_tokens=${outputTokens}`,
+      );
+      return {
+        apiCalls: callNumber,
+        inputTokens,
+        outputTokens,
+        finalText: finalText || "The model response was incomplete.",
+        stoppedAtCallLimit: false,
+        status: "incomplete",
+        incompleteReason: reason,
+      };
+    }
 
     if (toolCalls.length === 0) {
       finalText = outputText(response);
@@ -114,6 +141,8 @@ export async function runExperiment(options: {
         outputTokens,
         finalText,
         stoppedAtCallLimit,
+        status: "completed",
+        incompleteReason: null,
       };
     }
 
@@ -136,7 +165,7 @@ export async function runExperiment(options: {
         `[tool] request name=${toolCall.name} call_id=${toolCall.call_id} arguments=${toolCall.arguments}`,
       );
 
-      const outcome = runFindArticleCall(toolCall.name, toolCall.arguments);
+      const outcome = runToolCall(catalog, toolCall.name, toolCall.arguments);
       const output = JSON.stringify(outcome);
 
       log(`[tool] result call_id=${toolCall.call_id} ${output}`);
@@ -154,7 +183,7 @@ export async function runExperiment(options: {
   );
 
   if (!finalText) {
-    finalText = "Stopped after 3 model calls before a final answer.";
+    finalText = `Stopped after ${MAX_MODEL_CALLS} model calls before a final answer.`;
   }
 
   return {
@@ -163,5 +192,7 @@ export async function runExperiment(options: {
     outputTokens,
     finalText,
     stoppedAtCallLimit,
+    status: "completed",
+    incompleteReason: null,
   };
 }

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type OpenAI from "openai";
+import { createCatalog } from "../src/articles";
 import { MAX_MODEL_CALLS, MAX_OUTPUT_TOKENS, runExperiment, type ModelClient } from "../src/experiment";
-import { runFindArticleCall } from "../src/findArticleTool";
+import { runToolCall } from "../src/tools";
 
 /**
  * These tests use a fake client. They do not read an API key or call OpenAI.
@@ -111,13 +112,15 @@ describe("runExperiment", () => {
     assert.equal(result.outputTokens, 16);
     assert.equal(result.finalText, "Beta-Driven Development is in the mock catalog.");
     assert.equal(result.stoppedAtCallLimit, false);
+    assert.equal(result.status, "completed");
+    assert.equal(result.incompleteReason, null);
 
     const outputs = toolOutputs(requests[1]);
     assert.equal(outputs.length, 1);
     assert.deepEqual(outputs[0], {
       type: "function_call_output",
       call_id: "call_test_1",
-      output: JSON.stringify(runFindArticleCall("findArticle", rawArguments)),
+      output: JSON.stringify(runToolCall(createCatalog(), "findArticle", rawArguments)),
     });
 
     assert.ok(lines.some((line) => line.includes("[tool] request") && line.includes("call_test_1")));
@@ -125,13 +128,10 @@ describe("runExperiment", () => {
     assert.ok(lines.some((line) => line.includes("api_calls=2")));
   });
 
-  it("stops at three model calls and does not execute a tool after the last one", async () => {
+  it("stops at five model calls and does not execute a tool after the last one", async () => {
     const rawArguments = JSON.stringify({ slug: "beta-driven-development" });
-    const { client, requests } = scriptedClient([
-      functionCall("call_1", rawArguments),
-      functionCall("call_2", rawArguments),
-      functionCall("call_3", rawArguments),
-    ]);
+    const callIds = ["call_1", "call_2", "call_3", "call_4", "call_5"];
+    const { client, requests } = scriptedClient(callIds.map((callId) => functionCall(callId, rawArguments)));
     const lines: string[] = [];
 
     const result = await runExperiment({
@@ -141,22 +141,118 @@ describe("runExperiment", () => {
       log: (line) => lines.push(line),
     });
 
-    assert.equal(MAX_MODEL_CALLS, 3);
-    assert.equal(requests.length, 3);
-    assert.equal(result.apiCalls, 3);
+    assert.equal(MAX_MODEL_CALLS, 5);
+    assert.equal(requests.length, 5);
+    assert.equal(result.apiCalls, 5);
+    assert.equal(result.inputTokens, 55);
+    assert.equal(result.outputTokens, 35);
     assert.equal(result.stoppedAtCallLimit, true);
+    assert.ok(lines.some((line) => line.includes("[usage] api_calls=5 input_tokens=55 output_tokens=35")));
 
-    const sentOnThirdRequest = toolOutputs(requests[2]).map((item) =>
+    const sentOnLastRequest = toolOutputs(requests[4]).map((item) =>
       "call_id" in item ? item.call_id : "",
     );
-    assert.deepEqual(sentOnThirdRequest, ["call_1", "call_2"]);
-    assert.ok(lines.some((line) => line.includes("[tool] result") && line.includes("call_1")));
-    assert.ok(lines.some((line) => line.includes("[tool] result") && line.includes("call_2")));
+    assert.deepEqual(sentOnLastRequest, ["call_1", "call_2", "call_3", "call_4"]);
+    for (const callId of ["call_1", "call_2", "call_3", "call_4"]) {
+      assert.ok(lines.some((line) => line.includes("[tool] result") && line.includes(callId)));
+    }
     assert.equal(
-      lines.some((line) => line.includes("[tool] result") && line.includes("call_3")),
+      lines.some((line) => line.includes("[tool] result") && line.includes("call_5")),
       false,
     );
-    assert.ok(lines.some((line) => line.includes("did not execute call_id=call_3")));
+    assert.ok(lines.some((line) => line.includes("did not execute call_id=call_5")));
+    assert.equal(result.status, "completed");
+    assert.equal(result.incompleteReason, null);
+  });
+
+  it("does not execute tool calls from an incomplete response", async () => {
+    const { client, requests } = scriptedClient([
+      functionCall("call_ok", JSON.stringify({ slug: "beta-driven-development" })),
+      {
+        id: "resp_incomplete",
+        model: "provider/actual-model",
+        status: "incomplete",
+        incomplete_details: { reason: "max_output_tokens" },
+        output: [
+          {
+            type: "function_call",
+            call_id: "call_partial",
+            name: "createDraft",
+            arguments: JSON.stringify({
+              slug: "office-notes",
+              title: "Office Notes",
+              summary: "A draft about the desk.",
+            }),
+          },
+        ],
+        usage: {
+          input_tokens: 11,
+          output_tokens: 7,
+          total_tokens: 18,
+        },
+      } as unknown as OpenAI.Responses.Response,
+      message("This follow-up must not be requested."),
+    ]);
+    const lines: string[] = [];
+
+    const result = await runExperiment({
+      client,
+      model: "provider/model-name",
+      prompt: "Create a draft",
+      log: (line) => lines.push(line),
+    });
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1]?.max_output_tokens, 512);
+    assert.equal(result.apiCalls, 2);
+    assert.equal(result.status, "incomplete");
+    assert.equal(result.incompleteReason, "max_output_tokens");
+    assert.equal(result.stoppedAtCallLimit, false);
+    assert.equal(result.finalText, "The model response was incomplete.");
+    assert.ok(lines.some((line) => line.includes("[tool] result") && line.includes("call_ok")));
+    assert.equal(
+      lines.some((line) => line.includes("[tool] result") && line.includes("call_partial")),
+      false,
+    );
+    assert.ok(lines.includes("[api] status=incomplete reason=max_output_tokens"));
+    assert.ok(lines.includes("[incomplete] did not execute call_id=call_partial"));
+  });
+
+  it("records an unknown reason when an incomplete response omits one", async () => {
+    const { client, requests } = scriptedClient([
+      {
+        id: "resp_incomplete",
+        model: "provider/actual-model",
+        status: "incomplete",
+        output_text: "Partial answer",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            status: "incomplete",
+            content: [{ type: "output_text", text: "Partial answer", annotations: [] }],
+          },
+        ],
+        usage: {
+          input_tokens: 4,
+          output_tokens: 2,
+          total_tokens: 6,
+        },
+      } as unknown as OpenAI.Responses.Response,
+    ]);
+
+    const result = await runExperiment({
+      client,
+      model: "provider/model-name",
+      prompt: "Say something",
+      log: () => undefined,
+    });
+
+    assert.equal(requests.length, 1);
+    assert.equal(result.status, "incomplete");
+    assert.equal(result.incompleteReason, "unknown");
+    assert.equal(result.finalText, "Partial answer");
+    assert.equal(result.stoppedAtCallLimit, false);
   });
 
   it("parses an OpenRouter function call and sends the output with its call id", async () => {
@@ -247,7 +343,7 @@ describe("runExperiment", () => {
       {
         type: "function_call_output",
         call_id: "call_xyz789",
-        output: JSON.stringify(runFindArticleCall("findArticle", rawArguments)),
+        output: JSON.stringify(runToolCall(createCatalog(), "findArticle", rawArguments)),
       },
     ]);
 

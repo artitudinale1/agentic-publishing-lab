@@ -1,10 +1,10 @@
-# Agentic Publishing Lab — Step 1
+# Agentic Publishing Lab — Step 2
 
 A minimal Node.js and TypeScript program that shows function calling with the Responses API. It uses the official OpenAI SDK. Set `OPENAI_BASE_URL` to point that same client at OpenRouter.
 
-The only tool is a local mock, `findArticle(slug)`. The catalog contains one article, `beta-driven-development`. The program does not connect to a blog, Cloudinary, or any other service. Nothing in this step deploys, and the tests never call the API.
+The tools are `findArticle`, `createDraft`, and `updateDraft`. Each run gets its own in-memory catalog, seeded with the published article `beta-driven-development`. The model chooses which tools to call and in which order. The backend validates arguments and applies the catalog rules. There is no publish tool. The program does not connect to a blog, Cloudinary, or any other service, and the tests never call the API.
 
-Running `npm start` is manual. Each run sends your prompt to the configured provider and can incur a small charge. It makes at most three Responses API calls. There is no fallback model.
+Running `npm start` is manual. Each run sends your prompt to the configured provider and can incur a small charge. It makes at most five Responses API calls. There is no fallback model.
 
 ## Project structure
 
@@ -16,15 +16,16 @@ agentic-publishing-lab/
 ├── tsconfig.json
 ├── README.md
 ├── src/
-│   ├── articles.ts          # mock catalog and findArticle
+│   ├── articles.ts          # per-run catalog, find, create draft, update draft
 │   ├── config.ts            # API key, model, optional base URL
-│   ├── findArticleTool.ts   # strict tool schema, argument checks, local execution
-│   ├── experiment.ts        # prompt → model → tool → model, with logs and limits
+│   ├── tools.ts             # strict tool schemas, argument checks, backend execution
+│   ├── experiment.ts        # prompt → model → whichever tool it requested → model
 │   └── index.ts             # terminal entry; the only file that creates an OpenAI client
 └── test/
     ├── config.test.ts       # official API and OpenRouter base URL
+    ├── drafts.test.ts       # create, update, duplicates, and invalid draft arguments
     ├── findArticle.test.ts  # existing article, missing article, invalid arguments
-    └── experiment.test.ts   # call id, limits, and OpenRouter response fixtures
+    └── experiment.test.ts   # call id, five-call limit, and OpenRouter response fixtures
 ```
 
 ## Setup
@@ -76,16 +77,16 @@ npm start -- "Do you have an article called shipping-notes?"
 The program will:
 
 1. Read the prompt from the terminal.
-2. Send it with the `findArticle` tool definition.
+2. Send it with the `findArticle`, `createDraft`, and `updateDraft` tool definitions. Tool choice stays on `auto`.
 3. Print the function call the model returned.
 4. Check the arguments locally.
-5. Run `findArticle` only when the arguments are valid.
+5. Run that tool only when the arguments are valid and the catalog rule allows it. Creating a duplicate slug is rejected. Updating a missing or published article is rejected.
 6. Send that result back with the model's `call_id`.
 7. Print the model's final text.
 
 It also prints each tool request, each tool result, the API call count, and input and output tokens.
 
-SDK retries are off (`maxRetries: 0`). Each response is capped at 256 output tokens. The loop stops after three model calls. If the third response is still a tool call, that call is logged and the tool is not executed, because sending the result would take a fourth model call.
+SDK retries are off (`maxRetries: 0`). Each response is capped at 512 output tokens. The loop stops after five model calls. If the fifth response is still a tool call, that call is logged and the tool is not executed, because sending the result would take a sixth model call. A response with status `incomplete` is also not used for tool execution. The terminal prints that status and the provider's reason, and the same fields are on the experiment result. Input and output tokens are logged for every response.
 
 ## Live OpenRouter observations
 
@@ -115,6 +116,14 @@ The reply reported that the article does not exist.
 | Input tokens | 646 |
 | Output tokens | 60 |
 
+## Live multi-tool observations
+
+These are manual OpenRouter runs of `findArticle`, `createDraft`, and `updateDraft`. They are observations from those runs, not a reliability benchmark.
+
+### Published article protection
+
+The model inspected `beta-driven-development` with `findArticle` and then chose not to call `updateDraft`. The published article stayed unchanged because no update was requested. This run did not exercise backend rejection. The deterministic tests still send a fake `updateDraft` for that published slug and require the backend to reject it.
+
 ## Tests
 
 ```bash
@@ -126,4 +135,4 @@ npm run typecheck
 
 ## Stop
 
-This repository is Step 1 only.
+This repository stops at Step 2. Drafts stay in memory for one run. Nothing is published.

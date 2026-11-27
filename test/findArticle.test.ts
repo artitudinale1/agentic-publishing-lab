@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { findArticle } from "../src/articles";
-import { parseFindArticleArguments, runFindArticleCall } from "../src/findArticleTool";
+import { createCatalog, findArticle } from "../src/articles";
+import { parseToolArguments, runToolCall } from "../src/tools";
 
 const EXISTING_SLUG = "beta-driven-development";
 
 describe("findArticle", () => {
-  it("returns the one existing article", () => {
-    const result = findArticle(EXISTING_SLUG);
+  it("returns the published seed article", () => {
+    const result = findArticle(createCatalog(), EXISTING_SLUG);
 
     assert.equal(result.found, true);
     if (!result.found) {
@@ -15,6 +15,7 @@ describe("findArticle", () => {
     }
 
     assert.equal(result.article.slug, EXISTING_SLUG);
+    assert.equal(result.article.status, "published");
     assert.equal(
       result.article.title,
       "Beta-Driven Development: An Agentic Architecture for Resource Acquisition",
@@ -26,7 +27,7 @@ describe("findArticle", () => {
   });
 
   it("reports a missing article", () => {
-    const result = findArticle("not-in-the-catalog");
+    const result = findArticle(createCatalog(), "not-in-the-catalog");
 
     assert.deepEqual(result, {
       found: false,
@@ -38,9 +39,9 @@ describe("findArticle", () => {
 
 describe("findArticle arguments", () => {
   it("accepts a slug string", () => {
-    assert.deepEqual(parseFindArticleArguments(JSON.stringify({ slug: EXISTING_SLUG })), {
+    assert.deepEqual(parseToolArguments(JSON.stringify({ slug: EXISTING_SLUG }), ["slug"]), {
       ok: true,
-      slug: EXISTING_SLUG,
+      values: { slug: EXISTING_SLUG },
     });
   });
 
@@ -56,26 +57,24 @@ describe("findArticle arguments", () => {
     ] as const;
 
     for (const [raw, error] of cases) {
-      const parsed = parseFindArticleArguments(raw);
+      const parsed = parseToolArguments(raw, ["slug"]);
       assert.deepEqual(parsed, { ok: false, error });
 
-      const outcome = runFindArticleCall("findArticle", raw);
+      const outcome = runToolCall(createCatalog(), "findArticle", raw);
       assert.deepEqual(outcome, { ok: false, error });
     }
   });
 
-  it("runs the mock only after validation succeeds", () => {
-    const found = runFindArticleCall(
-      "findArticle",
-      JSON.stringify({ slug: EXISTING_SLUG }),
-    );
+  it("runs the lookup only after validation succeeds", () => {
+    const found = runToolCall(createCatalog(), "findArticle", JSON.stringify({ slug: EXISTING_SLUG }));
     assert.equal(found.ok, true);
-    if (!found.ok) {
+    if (!found.ok || !("found" in found.result)) {
       return;
     }
     assert.equal(found.result.found, true);
 
-    const missing = runFindArticleCall(
+    const missing = runToolCall(
+      createCatalog(),
       "findArticle",
       JSON.stringify({ slug: "missing-article" }),
     );
