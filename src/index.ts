@@ -1,18 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
-import { basename } from "node:path";
-import { createInterface } from "node:readline/promises";
-import { stdin as input, stdout as output } from "node:process";
-import OpenAI from "openai";
-import { createBlogClient, persistValidatedDraft, readBlogConfig } from "./blog";
-import { createCloudinaryUploader, createInlineImageUploader, inspectCoverFile, readCloudinaryConfig } from "./cover";
-import { prepareInlineImages } from "./images";
-import { openAIClientOptions, readConfig } from "./config";
-import { parseCli, type CliRun } from "./editorial";
-import { formatRunOutput, runExperiment } from "./experiment";
+import { runCli } from "./cli.js";
 
 /**
- * Manual entry point. This is the only file that constructs an OpenAI client.
- * Tests do not import it, and nothing here runs unless you start the program.
+ * Manual entry point. Tests do not import this file.
+ * The publishing workflow lives in the engine. This process only loads local
+ * configuration and adapts the command line.
  */
 
 /** Load `.env` from the current directory. Existing shell variables win. */
@@ -53,97 +45,9 @@ function loadLocalEnv(): void {
   }
 }
 
-async function readRun(): Promise<CliRun> {
-  const argv = process.argv.slice(2);
-
-  if (argv.length > 0) {
-    return parseCli(argv);
-  }
-
-  if (!input.isTTY) {
-    throw new Error('Pass a prompt: npm start -- "Look up beta-driven-development"');
-  }
-
-  const rl = createInterface({ input, output });
-
-  try {
-    const line = await rl.question("Prompt: ");
-    return { prompt: line.trim(), target: "mock" };
-  } finally {
-    rl.close();
-  }
-}
-
 async function main(): Promise<void> {
   loadLocalEnv();
-
-  const run = await readRun();
-
-  if (!run.prompt) {
-    throw new Error("Prompt is empty. No API request was sent.");
-  }
-
-  if (run.coverPath) {
-    inspectCoverFile(run.coverPath);
-  }
-  prepareInlineImages(run.images ?? [], run.request?.mode === "existing" ? run.request.body : undefined, run.request?.mode);
-
-  const blogConfig = run.target === "live" ? readBlogConfig(process.env) : undefined;
-  const cloudinaryConfig =
-    run.target === "live" && (run.coverPath || (run.images && run.images.length > 0))
-      ? readCloudinaryConfig(process.env)
-      : undefined;
-  const config = readConfig(process.env);
-  const client = new OpenAI(openAIClientOptions(config));
-
-  console.log(`[config] requested_model=${config.model} max_retries=0`);
-  if (config.baseURL) {
-    console.log(`[config] base_url=${config.baseURL}`);
-  }
-  if (run.request) {
-    console.log(`[config] mode=${run.request.mode}`);
-    if (run.request.category) {
-      console.log(`[config] category=${run.request.category}`);
-    }
-  }
-  console.log(`[config] target=${run.target}`);
-  if (run.coverPath) {
-    console.log(`[config] cover=${basename(run.coverPath)}`);
-  }
-  if (run.images && run.images.length > 0) {
-    console.log(`[config] inline=${run.images.map((image) => image.id).join(",")}`);
-  }
-
-  const blog = blogConfig ? createBlogClient(blogConfig) : undefined;
-  const uploadCover = cloudinaryConfig && run.coverPath ? createCloudinaryUploader(cloudinaryConfig) : undefined;
-  const uploadInline =
-    cloudinaryConfig && run.images && run.images.length > 0 ? createInlineImageUploader(cloudinaryConfig) : undefined;
-
-  const result = await runExperiment({
-    client,
-    model: config.model,
-    prompt: run.prompt,
-    request: run.request,
-  });
-
-  console.log(
-    `[result] status=${result.status} incomplete_reason=${result.incompleteReason ?? "none"}`,
-  );
-  console.log("");
-  console.log(formatRunOutput(result));
-
-  await persistValidatedDraft({
-    target: run.target,
-    draft: result.draft,
-    request: run.request,
-    status: result.status,
-    stoppedAtCallLimit: result.stoppedAtCallLimit,
-    client: blog,
-    coverPath: run.coverPath,
-    uploadCover,
-    images: run.images,
-    uploadInline,
-  });
+  await runCli(process.argv.slice(2), process.env);
 }
 
 main().catch((error: unknown) => {

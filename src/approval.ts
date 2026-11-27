@@ -1,4 +1,4 @@
-import type { Catalog } from "./articles";
+import type { Catalog } from "./articles.js";
 
 /**
  * Human approval is not a model tool and is not required to save a draft.

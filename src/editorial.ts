@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { isArticleCategory, type ArticleCategory } from "./articles";
-import { MAX_INLINE_IMAGES, type InlineImage, type InlineImagePrompt } from "./images";
+import { isArticleCategory, type ArticleCategory } from "./articles.js";
+import { MAX_INLINE_IMAGES, type InlineImage, type InlineImagePrompt } from "./images.js";
 
 /**
  * An explicit editorial task. Orchestration stays with the model;

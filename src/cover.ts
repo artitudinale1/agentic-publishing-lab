@@ -1,5 +1,5 @@
-import { closeSync, openSync, readSync, statSync } from "node:fs";
-import { extname } from "node:path";
+import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { basename, extname } from "node:path";
 import { v2 as cloudinary } from "cloudinary";
 
 export const MAX_COVER_BYTES = 5 * 1024 * 1024;
@@ -77,6 +77,29 @@ export function inspectCoverFile(filePath: string, label = "Cover image"): { pat
   }
 
   return { path: filePath, mediaType: classifyCover(header, size, extname(filePath), label) };
+}
+
+/** Validate bytes the caller already holds. The filename is not opened. */
+export function inspectCoverBytes(bytes: Uint8Array, filename: string, label = "Cover image"): CoverMediaType {
+  const header = Buffer.from(bytes.subarray(0, 12));
+  return classifyCover(header, bytes.byteLength, extname(basename(filename)), label);
+}
+
+export function imageDataUri(bytes: Uint8Array, mediaType: CoverMediaType): string {
+  return `data:${mediaType};base64,${Buffer.from(bytes).toString("base64")}`;
+}
+
+/** Read one file the CLI user named, after the same checks as inspectCoverFile. */
+export function loadCoverFile(
+  filePath: string,
+  label = "Cover image",
+): { filename: string; bytes: Buffer; mediaType: CoverMediaType } {
+  const inspected = inspectCoverFile(filePath, label);
+  try {
+    return { filename: basename(filePath), bytes: readFileSync(filePath), mediaType: inspected.mediaType };
+  } catch {
+    throw new Error(`${label} could not be read.`);
+  }
 }
 
 export function classifyCover(header: Buffer, size: number, extension: string, label = "Cover image"): CoverMediaType {

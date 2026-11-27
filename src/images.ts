@@ -1,4 +1,4 @@
-import { inspectCoverFile } from "./cover";
+import { inspectCoverBytes, inspectCoverFile } from "./cover.js";
 
 export const MAX_INLINE_IMAGES = 5;
 
@@ -9,7 +9,9 @@ export type InlineImagePrompt = {
 };
 
 export type InlineImage = InlineImagePrompt & {
-  path: string;
+  path?: string;
+  bytes?: Uint8Array;
+  filename?: string;
 };
 
 /** Same image syntax the blog renderer accepts: no spaces in the destination. */
@@ -166,7 +168,13 @@ export function replaceImagePlaceholders(body: string, urls: ReadonlyMap<string,
 /** Inspect every supplied file, then reject unknown placeholders in an existing article. */
 export function prepareInlineImages(images: readonly InlineImage[], body: string | undefined, mode: "existing" | "generate" | undefined): void {
   for (const image of images) {
-    inspectCoverFile(image.path, "Inline image");
+    if (image.bytes) {
+      inspectCoverBytes(image.bytes, image.filename ?? image.id, "Inline image");
+    } else if (image.path) {
+      inspectCoverFile(image.path, "Inline image");
+    } else {
+      throw new Error("Inline image could not be read.");
+    }
   }
 
   if (mode === "existing" && body !== undefined) {

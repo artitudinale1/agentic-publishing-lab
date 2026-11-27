@@ -1,9 +1,9 @@
-import type { Article, ArticleCategory } from "./articles";
-import type { CoverUploader } from "./cover";
-import { inspectCoverFile } from "./cover";
-import type { EditorialRequest, RunTarget } from "./editorial";
-import { replaceImagePlaceholders, validateArticleMarkdown, validateResolvedMarkdown, type InlineImage } from "./images";
-import { validateStoredArticle } from "./validation";
+import type { Article, ArticleCategory } from "./articles.js";
+import type { CoverUploader } from "./cover.js";
+import { imageDataUri, inspectCoverBytes, inspectCoverFile } from "./cover.js";
+import type { EditorialRequest, RunTarget } from "./editorial.js";
+import { replaceImagePlaceholders, validateArticleMarkdown, validateResolvedMarkdown, type InlineImage } from "./images.js";
+import { validateStoredArticle } from "./validation.js";
 
 /** One GraphQL request. Mutations are not retried. */
 export const BLOG_REQUEST_TIMEOUT_MS = 60_000;
@@ -288,6 +288,8 @@ export async function persistValidatedDraft(options: {
   stoppedAtCallLimit: boolean;
   client?: ReturnType<typeof createBlogClient>;
   coverPath?: string;
+  coverBytes?: Uint8Array;
+  coverFilename?: string;
   uploadCover?: CoverUploader;
   images?: readonly InlineImage[];
   uploadInline?: CoverUploader;
@@ -330,7 +332,7 @@ export async function persistValidatedDraft(options: {
   if (options.target === "mock") {
     const report = {
       persisted: false,
-      message: mockMessage(Boolean(options.coverPath), (options.images?.length ?? 0) > 0),
+      message: mockMessage(hasCoverImage(options), (options.images?.length ?? 0) > 0),
     };
     log(`[blog] ${report.message}`);
     return report;
@@ -350,20 +352,21 @@ export async function persistValidatedDraft(options: {
   if (lookup.status === "found") {
     const report = {
       persisted: false,
-      message: existingSlugMessage(options.draft.slug, Boolean(options.coverPath), (options.images?.length ?? 0) > 0),
+      message: existingSlugMessage(options.draft.slug, hasCoverImage(options), (options.images?.length ?? 0) > 0),
     };
     log(`[blog] ${report.message}`);
     return report;
   }
 
   let coverImageUrl: string | undefined;
-  if (options.coverPath) {
+  if (options.coverPath || options.coverBytes) {
     if (!options.uploadCover) {
       throw new Error("Live mode with a cover image requires Cloudinary configuration.");
     }
 
+    let coverSource: string;
     try {
-      inspectCoverFile(options.coverPath);
+      coverSource = coverUploadSource(options);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Cover image could not be read.";
       const report = { persisted: false, message };
@@ -371,7 +374,7 @@ export async function persistValidatedDraft(options: {
       return report;
     }
 
-    const uploaded = await options.uploadCover(options.coverPath);
+    const uploaded = await options.uploadCover(coverSource);
     if (uploaded.status !== "uploaded") {
       const report = { persisted: false, message: uploaded.message };
       log(`[blog] ${report.message}`);
@@ -396,8 +399,9 @@ export async function persistValidatedDraft(options: {
         return report;
       }
 
+      let inlineSource: string;
       try {
-        inspectCoverFile(image.path, "Inline image");
+        inlineSource = inlineUploadSource(image);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Inline image could not be read.";
         const report = { persisted: false, message: orphanMessage(message, coverImageUrl, uploadedInline) };
@@ -405,7 +409,7 @@ export async function persistValidatedDraft(options: {
         return report;
       }
 
-      const uploaded = await options.uploadInline(image.path);
+      const uploaded = await options.uploadInline(inlineSource);
       if (uploaded.status !== "uploaded") {
         const report = { persisted: false, message: orphanMessage(uploaded.message, coverImageUrl, uploadedInline) };
         log(`[blog] ${report.message}`);
@@ -447,6 +451,34 @@ export async function persistValidatedDraft(options: {
   const report = { persisted: false, message: orphanMessage(created.message, undefined, uploadedInline) };
   log(`[blog] ${report.message}`);
   return report;
+}
+
+function hasCoverImage(options: { coverPath?: string; coverBytes?: Uint8Array }): boolean {
+  return Boolean(options.coverPath || options.coverBytes);
+}
+
+function coverUploadSource(options: { coverPath?: string; coverBytes?: Uint8Array; coverFilename?: string }): string {
+  if (options.coverBytes) {
+    const mediaType = inspectCoverBytes(options.coverBytes, options.coverFilename ?? "cover", "Cover image");
+    return imageDataUri(options.coverBytes, mediaType);
+  }
+  if (options.coverPath) {
+    inspectCoverFile(options.coverPath);
+    return options.coverPath;
+  }
+  throw new Error("Cover image could not be read.");
+}
+
+function inlineUploadSource(image: InlineImage): string {
+  if (image.bytes) {
+    const mediaType = inspectCoverBytes(image.bytes, image.filename ?? image.id, "Inline image");
+    return imageDataUri(image.bytes, mediaType);
+  }
+  if (image.path) {
+    inspectCoverFile(image.path, "Inline image");
+    return image.path;
+  }
+  throw new Error("Inline image could not be read.");
 }
 
 function mockMessage(hasCover: boolean, hasInline: boolean): string {

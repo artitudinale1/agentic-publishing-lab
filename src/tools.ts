@@ -8,16 +8,16 @@ import {
   type ArticleCategory,
   type Catalog,
   type FindArticleResult,
-} from "./articles";
+} from "./articles.js";
 import {
   ARTICLE_LENGTHS,
   countWords,
   resolveArticleLength,
   type ArticleLength,
   type EditorialRequest,
-} from "./editorial";
-import { validateArticleMarkdown } from "./images";
-import { validateStoredArticle, type ValidationIssue, type ValidationSuccess } from "./validation";
+} from "./editorial.js";
+import { validateArticleMarkdown } from "./images.js";
+import { validateStoredArticle, type ValidationIssue, type ValidationSuccess } from "./validation.js";
 
 /**
  * Strict Responses API tools.

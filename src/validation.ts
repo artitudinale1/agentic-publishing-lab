@@ -3,13 +3,13 @@ import {
   isArticleCategory,
   type Article,
   type ArticleCategory,
-} from "./articles";
+} from "./articles.js";
 import {
   ARTICLE_LENGTHS,
   countWords,
   resolveArticleLength,
   type EditorialRequest,
-} from "./editorial";
+} from "./editorial.js";
 
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
