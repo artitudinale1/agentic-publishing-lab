@@ -2,8 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import OpenAI from "openai";
+import { createBlogClient, persistValidatedDraft, readBlogConfig } from "./blog";
 import { openAIClientOptions, readConfig } from "./config";
-import { parseCli, type EditorialRequest } from "./editorial";
+import { parseCli, type EditorialRequest, type RunTarget } from "./editorial";
 import { formatRunOutput, runExperiment } from "./experiment";
 
 /**
@@ -49,7 +50,7 @@ function loadLocalEnv(): void {
   }
 }
 
-async function readRun(): Promise<{ prompt: string; request?: EditorialRequest }> {
+async function readRun(): Promise<{ prompt: string; request?: EditorialRequest; target: RunTarget }> {
   const argv = process.argv.slice(2);
 
   if (argv.length > 0) {
@@ -64,7 +65,7 @@ async function readRun(): Promise<{ prompt: string; request?: EditorialRequest }
 
   try {
     const line = await rl.question("Prompt: ");
-    return { prompt: line.trim() };
+    return { prompt: line.trim(), target: "mock" };
   } finally {
     rl.close();
   }
@@ -79,6 +80,7 @@ async function main(): Promise<void> {
     throw new Error("Prompt is empty. No API request was sent.");
   }
 
+  const blogConfig = run.target === "live" ? readBlogConfig(process.env) : undefined;
   const config = readConfig(process.env);
   const client = new OpenAI(openAIClientOptions(config));
 
@@ -92,6 +94,9 @@ async function main(): Promise<void> {
       console.log(`[config] category=${run.request.category}`);
     }
   }
+  console.log(`[config] target=${run.target}`);
+
+  const blog = blogConfig ? createBlogClient(blogConfig) : undefined;
 
   const result = await runExperiment({
     client,
@@ -105,6 +110,15 @@ async function main(): Promise<void> {
   );
   console.log("");
   console.log(formatRunOutput(result));
+
+  await persistValidatedDraft({
+    target: run.target,
+    draft: result.draft,
+    request: run.request,
+    status: result.status,
+    stoppedAtCallLimit: result.stoppedAtCallLimit,
+    client: blog,
+  });
 }
 
 main().catch((error: unknown) => {

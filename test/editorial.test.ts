@@ -217,6 +217,13 @@ describe("editorial input", () => {
       /Unknown argument: --length/,
     );
     assert.throws(() => parseCli(["--mode", "publish", "--prompt", "Write"]), /existing or generate/);
+    assert.throws(
+      () => parseCli(["--mode", "generate", "--prompt", "Write", "--target", "remote"]),
+      /mock or live/,
+    );
+    assert.equal(parseCli(["--target", "live", "Look up beta"]).target, "live");
+    assert.equal(parseCli(["--target", "live", "Look up beta"]).prompt, "Look up beta");
+    assert.equal(parseCli(["Look up beta"]).target, "mock");
     assert.throws(() => loadMarkdownFile("missing.md"), /Article file not found/);
     assert.throws(() => loadMarkdownFile("notes.txt"), /must end in \.md/);
 

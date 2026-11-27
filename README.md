@@ -1,4 +1,4 @@
-# Agentic Publishing Lab — Step 4
+# Agentic Publishing Lab — Step 5B
 
 A minimal Node.js and TypeScript program that shows function calling with the Responses API. It uses the official OpenAI SDK. Set `OPENAI_BASE_URL` to point that same client at OpenRouter.
 
@@ -144,7 +144,22 @@ npm start -- --mode generate --prompt "Write about Beta the cat." --length short
 
 Approval is a backend operation. It is not a model tool, and this program does not ask for it on the command line. Approval is accepted only for a draft that `validateArticle` has accepted, and only for that exact revision. A later edit clears both validation and approval. Rejecting approval leaves the saved draft in place. The model cannot approve its own draft.
 
-Publication is not available to the agent. Review and publication stay in the blog editor. Drafts remain in memory for one run.
+Publication is not available to the agent. Review and publication stay in the blog editor. This program never calls `publishPost` or `unpublishPost`.
+
+### Blog persistence
+
+`--target mock` is the default. The agent still edits the in-memory catalog, and a finished draft stays there.
+
+`--target live` checks `BLOG_API_URL` and `AGENT_API_SECRET` before any model call. A missing value stops the run. The secret is sent only as `X-Agent-Authorization: Bearer <AGENT_API_SECRET>`.
+
+After a completed run, the backend validates the final draft again. Invalid drafts and drafts from an unfinished run are not sent. Live mode then looks up the slug with `editorPosts`, including drafts, one page at a time. A failed or unfinished lookup is not treated as a missing article, and `createPost` is not called. An existing remote slug is left unchanged. A new draft is stored with `createPost`, the Markdown is sent unchanged, and the returned status must be `DRAFT`.
+
+Each blog request has a 60 second timeout. A lookup may be tried once more after a network failure or a Render cold-start response. `createPost` is never retried. If that write does not finish, the result says the remote draft may or may not exist.
+
+```bash
+npm start -- --target mock --mode generate --prompt "Write about Beta the cat." --length short --category CATS
+npm start -- --target live --mode generate --prompt "Write about Beta the cat." --length short --category CATS
+```
 
 Each request sets `parallel_tool_calls` to false, so the model is asked for one tool call. If a completed response still contains several function calls, the backend runs them in that order and returns each result with its own `call_id`. An incomplete response does not run any of them. The last of the five model calls does not run them either.
 
@@ -226,6 +241,26 @@ Duplicate protection was not exercised on this run because the model did not loo
 | Output tokens | 1033 |
 | Tool sequence | `createDraft`, `validateArticle` |
 
+## Live blog integration
+
+This is the first successful manual run that stored a validated draft through the blog GraphQL API. It is an observation from that run, not a reliability benchmark. `--target mock` remains the default. This run set `--target live`.
+
+The article was "The Sacred Belly Protocol", in existing-article mode. The backend kept the supplied Markdown and stored the draft with `createPost`. The remote status was `DRAFT`. The draft was visible in the existing blog editor. The agent did not publish it.
+
+| | |
+|---|---|
+| Article | The Sacred Belly Protocol |
+| Mode | existing |
+| Target | live |
+| Slug | sacred-belly-protocol-lab |
+| Category | CODE |
+| Word count | 30 |
+| API calls | 3 |
+| Input tokens | 3370 |
+| Output tokens | 526 |
+| Tool sequence | `createDraft`, `validateArticle` |
+| Remote status | DRAFT |
+
 ## Tests
 
 ```bash
@@ -237,4 +272,4 @@ npm run typecheck
 
 ## Stop
 
-This repository stops at Step 4. Drafts stay in memory for one run. Nothing is published, and the agent cannot approve or publish.
+This repository stops at Step 5B. Mock runs keep drafts in memory. Live runs can store a validated draft only. The agent cannot publish.

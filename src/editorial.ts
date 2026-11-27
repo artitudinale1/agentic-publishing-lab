@@ -43,13 +43,16 @@ export type EditorialRequest =
       category?: ArticleCategory;
     };
 
+export type RunTarget = "mock" | "live";
+
 export type CliRun = {
   prompt: string;
   request?: EditorialRequest;
+  target: RunTarget;
 };
 
-const EXISTING_FLAGS = ["mode", "file", "instructions", "context", "category"];
-const GENERATE_FLAGS = ["mode", "prompt", "context", "length", "category"];
+const EXISTING_FLAGS = ["mode", "file", "instructions", "context", "category", "target"];
+const GENERATE_FLAGS = ["mode", "prompt", "context", "length", "category", "target"];
 
 function flagValue(argv: string[], name: string): string | undefined {
   const index = argv.indexOf(`--${name}`);
@@ -245,13 +248,45 @@ export function instructionsFor(request: EditorialRequest): string {
   ].join(" ");
 }
 
+function readTarget(argv: string[]): RunTarget {
+  const target = flagValue(argv, "target");
+  if (target === undefined) {
+    return "mock";
+  }
+
+  if (target === "mock" || target === "live") {
+    return target;
+  }
+
+  throw new Error("Set target to mock or live.");
+}
+
+function promptWithoutTarget(argv: string[]): string {
+  const parts: string[] = [];
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === "--target") {
+      index += 1;
+      continue;
+    }
+
+    if (token !== undefined) {
+      parts.push(token);
+    }
+  }
+
+  return parts.join(" ").trim();
+}
+
 export function parseCli(argv: string[]): CliRun {
   if (!argv.includes("--mode")) {
-    return { prompt: argv.join(" ").trim() };
+    return { prompt: promptWithoutTarget(argv), target: readTarget(argv) };
   }
 
   const mode = flagValue(argv, "mode");
   const context = flagValue(argv, "context");
+  const target = readTarget(argv);
 
   if (mode === "existing") {
     rejectUnknownFlags(argv, EXISTING_FLAGS);
@@ -268,7 +303,7 @@ export function parseCli(argv: string[]): CliRun {
       context,
       category: flagValue(argv, "category"),
     });
-    return { prompt: modelPrompt(request), request };
+    return { prompt: modelPrompt(request), request, target };
   }
 
   if (mode === "generate") {
@@ -285,7 +320,7 @@ export function parseCli(argv: string[]): CliRun {
       length: flagValue(argv, "length"),
       category: flagValue(argv, "category"),
     });
-    return { prompt: modelPrompt(request), request };
+    return { prompt: modelPrompt(request), request, target };
   }
 
   throw new Error("Set mode to existing or generate.");
