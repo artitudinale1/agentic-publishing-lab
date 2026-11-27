@@ -142,6 +142,7 @@ const metadata = {
   slug: "supplied-article",
   title: "Supplied Article",
   summary: "A summary written by the model.",
+  category: "CATS",
 };
 
 describe("editorial input", () => {
@@ -193,6 +194,10 @@ describe("editorial input", () => {
     );
     assert.throws(() => parseCli(["--mode", "existing"]), /requires --file and --instructions/);
     assert.throws(() => parseCli(["--mode", "generate"]), /requires --prompt/);
+    assert.throws(
+      () => parseCli(["--mode", "generate", "--prompt", "Write", "--category", "PETS"]),
+      /CODE, JAPANESE, CATS, or COOKING/,
+    );
     assert.throws(
       () => parseCli(["--mode", "generate", "--prompt", "Write", "--length", "huge"]),
       /short, medium, or long/,
@@ -299,7 +304,7 @@ describe("editorial drafts", () => {
     assert.ok(formatRunOutput(result).includes(SUPPLIED));
     assert.equal(formatRunOutput(result).startsWith("Draft saved."), true);
 
-    assert.deepEqual(requiredFields(script.requests[0]), ["slug", "title", "summary"]);
+    assert.deepEqual(requiredFields(script.requests[0]), ["slug", "title", "summary", "category"]);
   });
 
   it("rejects tool arguments that try to replace the supplied body", async () => {
@@ -369,7 +374,7 @@ describe("editorial drafts", () => {
     assert.equal(JSON.stringify(created).includes(generated), false);
     assert.equal(parsedOutput(script.requests[3], "call_find").result?.article?.body, generated);
 
-    assert.deepEqual(requiredFields(script.requests[0]), ["slug", "title", "summary", "body"]);
+    assert.deepEqual(requiredFields(script.requests[0]), ["slug", "title", "summary", "body", "category"]);
   });
 
   it("keeps published-article protection and skips incomplete tool calls", async () => {

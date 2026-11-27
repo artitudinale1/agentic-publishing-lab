@@ -2,8 +2,10 @@ import type OpenAI from "openai";
 import {
   createDraft,
   findArticle,
+  isArticleCategory,
   updateDraft,
   type Article,
+  type ArticleCategory,
   type Catalog,
   type FindArticleResult,
 } from "./articles";
@@ -14,6 +16,7 @@ import {
   type ArticleLength,
   type EditorialRequest,
 } from "./editorial";
+import { validateStoredArticle, type ValidationIssue, type ValidationSuccess } from "./validation";
 
 /**
  * Strict Responses API tools.
@@ -32,6 +35,28 @@ const findArticleTool: OpenAI.Responses.Tool = {
         type: "string",
         description: "Article slug, for example beta-driven-development.",
       },
+    },
+    required: ["slug"],
+    additionalProperties: false,
+  },
+  strict: true,
+};
+
+const CATEGORY_SCHEMA = {
+  type: "string",
+  enum: ["CODE", "JAPANESE", "CATS", "COOKING"],
+  description: "Article category: CODE, JAPANESE, CATS, or COOKING.",
+};
+
+const validateArticleTool: OpenAI.Responses.Tool = {
+  type: "function",
+  name: "validateArticle",
+  description:
+    "Check a saved draft by slug. Confirms the required fields, slug format, category, supplied-body preservation, and generated word limits. Saving a draft does not require this call. This tool does not approve or publish.",
+  parameters: {
+    type: "object",
+    properties: {
+      slug: { type: "string", description: "Slug of the saved draft to check." },
     },
     required: ["slug"],
     additionalProperties: false,
@@ -70,8 +95,9 @@ function createDraftTool(acceptsBody: boolean): OpenAI.Responses.Tool {
           slug: { type: "string", description: "New article slug." },
           title: { type: "string", description: "Draft title." },
           summary: { type: "string", description: "Draft summary." },
+          category: CATEGORY_SCHEMA,
         },
-        required: ["slug", "title", "summary"],
+        required: ["slug", "title", "summary", "category"],
         additionalProperties: false,
       },
       strict: true,
@@ -90,8 +116,9 @@ function createDraftTool(acceptsBody: boolean): OpenAI.Responses.Tool {
         title: { type: "string", description: "Draft title." },
         summary: { type: "string", description: "Draft summary." },
         body: { type: "string", description: "Full generated article body." },
+        category: CATEGORY_SCHEMA,
       },
-      required: ["slug", "title", "summary", "body"],
+      required: ["slug", "title", "summary", "body", "category"],
       additionalProperties: false,
     },
     strict: true,
@@ -102,17 +129,19 @@ export const articleTools: OpenAI.Responses.Tool[] = [
   findArticleTool,
   createDraftTool(false),
   updateDraftTool,
+  validateArticleTool,
 ];
 
 /** Tool list for one editorial mode. The model still chooses the call order. */
 export function toolsFor(request: EditorialRequest): OpenAI.Responses.Tool[] {
-  return [findArticleTool, createDraftTool(request.mode === "generate"), updateDraftTool];
+  return [findArticleTool, createDraftTool(request.mode === "generate"), updateDraftTool, validateArticleTool];
 }
 
 export type DraftToolArticle = {
   slug: string;
   title: string;
   summary: string;
+  category: ArticleCategory;
   status: Article["status"];
   bodyStored: true;
 };
@@ -130,9 +159,14 @@ export type ToolResult =
       result:
         | FindArticleResult
         | { created: true; article: DraftToolArticle }
-        | { updated: true; article: DraftToolArticle };
+        | { updated: true; article: DraftToolArticle }
+        | ValidationSuccess;
     }
-  | { ok: false; error: string; validation?: ArticleTooLong };
+  | {
+      ok: false;
+      error: string;
+      validation?: ArticleTooLong | { code: "invalid_article"; issues: ValidationIssue[] };
+    };
 
 /** Tool replies omit the body. The catalog keeps the full text. */
 function compactDraft(article: Article): DraftToolArticle {
@@ -140,6 +174,7 @@ function compactDraft(article: Article): DraftToolArticle {
     slug: article.slug,
     title: article.title,
     summary: article.summary,
+    category: article.category,
     status: article.status,
     bodyStored: true,
   };
@@ -222,8 +257,8 @@ export function runToolCall(
   if (name === "createDraft") {
     const fields =
       request?.mode === "generate"
-        ? ["slug", "title", "summary", "body"]
-        : ["slug", "title", "summary"];
+        ? ["slug", "title", "summary", "body", "category"]
+        : ["slug", "title", "summary", "category"];
     const parsed = parseToolArguments(rawArguments, fields);
     if (!parsed.ok) {
       return parsed;
@@ -251,12 +286,22 @@ export function runToolCall(
       }
     }
 
+    const category = field(parsed.values, "category");
+    if (!isArticleCategory(category)) {
+      return { ok: false, error: "Category must be CODE, JAPANESE, CATS, or COOKING." };
+    }
+
+    if (request?.category && category !== request.category) {
+      return { ok: false, error: `Category must be ${request.category}.` };
+    }
+
     const created = createDraft(
       catalog,
       field(parsed.values, "slug"),
       field(parsed.values, "title"),
       field(parsed.values, "summary"),
       body,
+      category,
     );
     if (!created.ok) {
       return created;
@@ -281,6 +326,21 @@ export function runToolCall(
     }
 
     return { ok: true, result: { updated: true, article: compactDraft(updated.result.article) } };
+  }
+
+  if (name === "validateArticle") {
+    const parsed = parseToolArguments(rawArguments, ["slug"]);
+    if (!parsed.ok) {
+      return parsed;
+    }
+
+    const slug = field(parsed.values, "slug");
+    const article = catalog.find((entry) => entry.slug === slug);
+    if (!article) {
+      return { ok: false, error: `No article found for slug "${slug}".` };
+    }
+
+    return validateStoredArticle(article, request);
   }
 
   return { ok: false, error: `Unknown tool: ${name}.` };

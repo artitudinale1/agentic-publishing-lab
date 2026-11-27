@@ -88,6 +88,9 @@ async function main(): Promise<void> {
   }
   if (run.request) {
     console.log(`[config] mode=${run.request.mode}`);
+    if (run.request.category) {
+      console.log(`[config] category=${run.request.category}`);
+    }
   }
 
   const result = await runExperiment({

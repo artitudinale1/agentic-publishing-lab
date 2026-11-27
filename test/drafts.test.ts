@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type OpenAI from "openai";
+import { articleRevision, type ArticleCategory } from "../src/articles";
 import { runExperiment, type ModelClient } from "../src/experiment";
 
 /**
@@ -17,7 +18,25 @@ const DRAFT = {
   slug: "office-notes",
   title: "Office Notes",
   summary: "A draft about the desk.",
+  category: "CATS" as ArticleCategory,
 };
+
+function savedDraft(title = DRAFT.title, summary = DRAFT.summary, body = "") {
+  const content = {
+    slug: DRAFT.slug,
+    title,
+    summary,
+    body,
+    category: DRAFT.category,
+  };
+  return {
+    ...content,
+    status: "draft" as const,
+    revision: articleRevision(content),
+    validatedRevision: null,
+    approvedRevision: null,
+  };
+}
 
 function toolCall(name: string, callId: string, args: unknown): OpenAI.Responses.Response {
   return {
@@ -113,10 +132,10 @@ describe("draft tools", () => {
     );
 
     assert.equal(result.finalText, "Created the draft.");
-    assert.deepEqual(result.draft, { ...DRAFT, body: "", status: "draft" });
+    assert.deepEqual(result.draft, savedDraft());
     assert.deepEqual(
       requests[0]?.tools?.map((tool) => ("name" in tool ? tool.name : "")),
-      ["findArticle", "createDraft", "updateDraft"],
+      ["findArticle", "createDraft", "updateDraft", "validateArticle"],
     );
     assert.equal(requests[0]?.tool_choice, "auto");
     assert.deepEqual(parsedOutput(requests[1], "call_create"), {
@@ -147,18 +166,16 @@ describe("draft tools", () => {
           slug: DRAFT.slug,
           title: "Office Notes, revised",
           summary: "A revised draft about the desk.",
+          category: "CATS",
           status: "draft",
           bodyStored: true,
         },
       },
     });
-    assert.deepEqual(result.draft, {
-      slug: DRAFT.slug,
-      title: "Office Notes, revised",
-      summary: "A revised draft about the desk.",
-      body: "",
-      status: "draft",
-    });
+    assert.deepEqual(
+      result.draft,
+      savedDraft("Office Notes, revised", "A revised draft about the desk."),
+    );
   });
 
   it("rejects updates to published and missing articles", async () => {
@@ -258,12 +275,14 @@ describe("draft tools", () => {
           slug: PUBLISHED_SLUG,
           title: "Another title",
           summary: "Another summary",
+          category: "CATS",
         }),
         toolCall("createDraft", "call_first", DRAFT),
         toolCall("createDraft", "call_duplicate", {
           slug: DRAFT.slug,
           title: "Different title",
           summary: "Different summary",
+          category: "CATS",
         }),
         toolCall("findArticle", "call_check", { slug: DRAFT.slug }),
         message("Duplicates were rejected."),
@@ -283,7 +302,7 @@ describe("draft tools", () => {
       ok: true,
       result: {
         found: true,
-        article: { ...DRAFT, status: "draft", body: "" },
+        article: savedDraft(),
       },
     });
   });

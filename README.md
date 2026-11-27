@@ -1,4 +1,4 @@
-# Agentic Publishing Lab — Step 3.3
+# Agentic Publishing Lab — Step 4
 
 A minimal Node.js and TypeScript program that shows function calling with the Responses API. It uses the official OpenAI SDK. Set `OPENAI_BASE_URL` to point that same client at OpenRouter.
 
@@ -126,7 +126,25 @@ npm start -- --mode generate --prompt "Write about Beta the cat." --length long 
 
 Published articles still cannot be updated. Duplicate slugs are still rejected. Incomplete responses still do not execute tools. The five-call limit and disabled retries are unchanged.
 
-`createDraft` and `updateDraft` results sent back to the model do not repeat the article body. They include slug, title, summary, status, and `bodyStored: true`. The catalog still keeps the complete body. `findArticle` returns that body.
+`createDraft` and `updateDraft` results sent back to the model do not repeat the article body. They include slug, title, summary, category, status, and `bodyStored: true`. The catalog still keeps the complete body. `findArticle` returns that body.
+
+### Validation
+
+`validateArticle` checks a saved draft. It requires a title, slug, summary, and body. The slug must be lowercase letters, numbers, and single hyphens. The category must be `CODE`, `JAPANESE`, `CATS`, or `COOKING`. In existing-article mode the stored body must still match the supplied file. In generate-article mode the word count must fall inside the selected length preset. The tool result does not include the body.
+
+Saving a draft does not require validation or approval. A failed check leaves the draft in memory and clears any earlier validation.
+
+Pass `--category` when the editorial request should fix the category. `createDraft` must use that same value.
+
+```bash
+npm start -- --mode generate --prompt "Write about Beta the cat." --length short --category CATS
+```
+
+### Human approval
+
+Approval is a backend operation. It is not a model tool, and this program does not ask for it on the command line. Approval is accepted only for a draft that `validateArticle` has accepted, and only for that exact revision. A later edit clears both validation and approval. Rejecting approval leaves the saved draft in place. The model cannot approve its own draft.
+
+Publication is not available to the agent. Review and publication stay in the blog editor. Drafts remain in memory for one run.
 
 Each request sets `parallel_tool_calls` to false, so the model is asked for one tool call. If a completed response still contains several function calls, the backend runs them in that order and returns each result with its own `call_id`. An incomplete response does not run any of them. The last of the five model calls does not run them either.
 
@@ -190,6 +208,24 @@ A later generate-article run with the short length preset finished successfully.
 
 The 199-word run used more API calls and more input tokens. The 241-word run used fewer calls and fewer input tokens, with more output tokens. Automatic model routing chooses the model for each call, so these runs were not held to one model. The figures are two observations. They are not a controlled performance comparison.
 
+## Live validation observation
+
+This is one successful manual generate-article run after `validateArticle` was added. It is an observation from that run, not a reliability benchmark.
+
+The article was "Feline Cybersecurity", category `CODE`, 193 words. The model called `createDraft`, then `validateArticle`. It did not call `findArticle`. Validation succeeded. The article stayed a draft in memory. Creating that draft did not require human approval. The agent had no publication capability.
+
+Duplicate protection was not exercised on this run because the model did not look up an existing slug and did not repeat one. The backend still rejects a duplicate slug. The deterministic tests still send a repeated slug and require that rejection.
+
+| | |
+|---|---|
+| Article | Feline Cybersecurity |
+| Category | CODE |
+| Word count | 193 |
+| API calls | 3 |
+| Input tokens | 5033 |
+| Output tokens | 1033 |
+| Tool sequence | `createDraft`, `validateArticle` |
+
 ## Tests
 
 ```bash
@@ -201,4 +237,4 @@ npm run typecheck
 
 ## Stop
 
-This repository stops at Step 3.3. Drafts stay in memory for one run. Nothing is published.
+This repository stops at Step 4. Drafts stay in memory for one run. Nothing is published, and the agent cannot approve or publish.

@@ -64,10 +64,12 @@ type Log = (line: string) => void;
 
 const INSTRUCTIONS = [
   "You help with a small in-memory article catalog.",
-  "You can call findArticle, createDraft, and updateDraft.",
+  "You can call findArticle, createDraft, updateDraft, and validateArticle.",
   "Choose which tools to call and in which order.",
   "Use only tool results. Do not invent catalog entries.",
   "If a tool reports an error, a duplicate slug, a missing article, or a published article, say that plainly.",
+  "validateArticle checks a saved draft. It does not approve or publish.",
+  "You cannot approve or publish.",
 ].join(" ");
 
 function outputText(response: OpenAI.Responses.Response): string {

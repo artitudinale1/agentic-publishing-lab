@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { isArticleCategory, type ArticleCategory } from "./articles";
 
 /**
  * An explicit editorial task. Orchestration stays with the model;
@@ -32,12 +33,14 @@ export type EditorialRequest =
       instructions: string;
       body: string;
       context?: string;
+      category?: ArticleCategory;
     }
   | {
       mode: "generate";
       prompt: string;
       context?: string;
       length?: ArticleLength;
+      category?: ArticleCategory;
     };
 
 export type CliRun = {
@@ -45,8 +48,8 @@ export type CliRun = {
   request?: EditorialRequest;
 };
 
-const EXISTING_FLAGS = ["mode", "file", "instructions", "context"];
-const GENERATE_FLAGS = ["mode", "prompt", "context", "length"];
+const EXISTING_FLAGS = ["mode", "file", "instructions", "context", "category"];
+const GENERATE_FLAGS = ["mode", "prompt", "context", "length", "category"];
 
 function flagValue(argv: string[], name: string): string | undefined {
   const index = argv.indexOf(`--${name}`);
@@ -109,6 +112,18 @@ export function loadMarkdownFile(filePath: string): string {
   return body;
 }
 
+function articleCategorySetting(category: string | undefined): ArticleCategory | undefined {
+  if (category === undefined) {
+    return undefined;
+  }
+
+  if (isArticleCategory(category)) {
+    return category;
+  }
+
+  throw new Error("Set category to CODE, JAPANESE, CATS, or COOKING.");
+}
+
 function articleLengthSetting(length: string | undefined): ArticleLength {
   if (length === undefined) {
     return "medium";
@@ -128,6 +143,7 @@ export function parseEditorialRequest(input: {
   body?: string;
   context?: string;
   length?: string;
+  category?: string;
 }): EditorialRequest {
   const context = optionalContext(input.context);
 
@@ -141,9 +157,14 @@ export function parseEditorialRequest(input: {
       throw new Error("Existing article mode requires the article body.");
     }
 
-    return context
-      ? { mode: "existing", instructions, body: input.body, context }
-      : { mode: "existing", instructions, body: input.body };
+    const category = articleCategorySetting(input.category);
+    return {
+      mode: "existing",
+      instructions,
+      body: input.body,
+      ...(context ? { context } : {}),
+      ...(category ? { category } : {}),
+    };
   }
 
   if (input.mode === "generate") {
@@ -153,9 +174,14 @@ export function parseEditorialRequest(input: {
     }
 
     const length = articleLengthSetting(input.length);
-    return context
-      ? { mode: "generate", prompt, context, length }
-      : { mode: "generate", prompt, length };
+    const category = articleCategorySetting(input.category);
+    return {
+      mode: "generate",
+      prompt,
+      length,
+      ...(context ? { context } : {}),
+      ...(category ? { category } : {}),
+    };
   }
 
   throw new Error("Set mode to existing or generate.");
@@ -187,7 +213,13 @@ export function instructionsFor(request: EditorialRequest): string {
     "Use only tool results. Do not invent catalog entries.",
     "If a tool reports an error, a duplicate slug, a missing article, or a published article, say that plainly.",
     "After createDraft succeeds, do not call findArticle for that article unless the user explicitly asked to read it back.",
+    "Before you finish, call validateArticle for the draft you saved.",
+    "Saving a draft does not require approval.",
+    "You cannot approve or publish. Approval and publication happen outside this workflow.",
     "When you are finished, reply with a short summary of what you did. Do not repeat the article body.",
+    request.category
+      ? `The category is ${request.category}. createDraft must use that category.`
+      : "createDraft must use a category of CODE, JAPANESE, CATS, or COOKING.",
   ];
 
   if (request.mode === "existing") {
@@ -234,6 +266,7 @@ export function parseCli(argv: string[]): CliRun {
       instructions,
       body: loadMarkdownFile(file),
       context,
+      category: flagValue(argv, "category"),
     });
     return { prompt: modelPrompt(request), request };
   }
@@ -250,6 +283,7 @@ export function parseCli(argv: string[]): CliRun {
       prompt,
       context,
       length: flagValue(argv, "length"),
+      category: flagValue(argv, "category"),
     });
     return { prompt: modelPrompt(request), request };
   }

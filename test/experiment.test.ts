@@ -417,7 +417,7 @@ describe("runExperiment", () => {
             type: "function_call",
             call_id: "call_create",
             name: "createDraft",
-            arguments: JSON.stringify(draft),
+            arguments: JSON.stringify({ ...draft, category: "CATS" }),
           },
           {
             type: "function_call",
