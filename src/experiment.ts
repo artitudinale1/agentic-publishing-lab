@@ -1,13 +1,27 @@
 import type OpenAI from "openai";
 import { toResponseInputItems } from "openai/lib/responses/ResponseInputItems";
-import { createCatalog } from "./articles";
-import { articleTools, runToolCall } from "./tools";
+import { createCatalog, type Article } from "./articles";
+import {
+  ARTICLE_LENGTHS,
+  instructionsFor,
+  resolveArticleLength,
+  type EditorialRequest,
+} from "./editorial";
+import { articleTools, runToolCall, toolsFor } from "./tools";
 
 /** Hard stop so a tool loop cannot keep calling the model. */
 export const MAX_MODEL_CALLS = 5;
 
-/** Conservative cap for each model response. */
-export const MAX_OUTPUT_TOKENS = 512;
+/** Existing-article mode, and runs that are not an editorial generate request. */
+export const EXISTING_ARTICLE_MAX_OUTPUT_TOKENS = 512;
+
+export function maxOutputTokens(request?: EditorialRequest): number {
+  if (request?.mode === "generate") {
+    return ARTICLE_LENGTHS[resolveArticleLength(request.length)].maxOutputTokens;
+  }
+
+  return EXISTING_ARTICLE_MAX_OUTPUT_TOKENS;
+}
 
 export type ModelClient = {
   responses: {
@@ -25,7 +39,26 @@ export type ExperimentResult = {
   stoppedAtCallLimit: boolean;
   status: "completed" | "incomplete";
   incompleteReason: string | null;
+  /** Last draft successfully created or updated in this run, copied from the catalog. */
+  draft: Article | null;
 };
+
+/** The model's summary, then the catalog article when this run stored a draft. */
+export function formatRunOutput(result: ExperimentResult): string {
+  if (!result.draft) {
+    return result.finalText;
+  }
+
+  return [
+    result.finalText,
+    "",
+    `[draft] slug=${result.draft.slug}`,
+    result.draft.title,
+    result.draft.summary,
+    "",
+    result.draft.body,
+  ].join("\n");
+}
 
 type Log = (line: string) => void;
 
@@ -67,10 +100,18 @@ export async function runExperiment(options: {
   client: ModelClient;
   model: string;
   prompt: string;
+  request?: EditorialRequest;
   log?: Log;
 }): Promise<ExperimentResult> {
   const log = options.log ?? ((line: string) => console.log(line));
   const catalog = createCatalog();
+  const tools = options.request ? toolsFor(options.request) : articleTools;
+  const instructions = options.request ? instructionsFor(options.request) : INSTRUCTIONS;
+  const outputTokenLimit = maxOutputTokens(options.request);
+  if (options.request?.mode === "generate") {
+    log(`[article] length=${resolveArticleLength(options.request.length)}`);
+  }
+  log(`[api] max_output_tokens=${outputTokenLimit}`);
   const input: OpenAI.Responses.ResponseInput = [
     { role: "user", content: options.prompt },
   ];
@@ -79,16 +120,30 @@ export async function runExperiment(options: {
   let outputTokens = 0;
   let stoppedAtCallLimit = false;
   let finalText = "";
+  let draftSlug: string | null = null;
+
+  const storedDraft = (): Article | null => {
+    if (draftSlug === null) {
+      return null;
+    }
+
+    const article = catalog.find((entry) => entry.slug === draftSlug);
+    if (!article || article.status !== "draft") {
+      return null;
+    }
+
+    return { ...article };
+  };
 
   for (let callNumber = 1; callNumber <= MAX_MODEL_CALLS; callNumber += 1) {
     const response = await options.client.responses.create({
       model: options.model,
-      instructions: INSTRUCTIONS,
+      instructions,
       input,
-      tools: articleTools,
+      tools,
       tool_choice: "auto",
       parallel_tool_calls: false,
-      max_output_tokens: MAX_OUTPUT_TOKENS,
+      max_output_tokens: outputTokenLimit,
       store: false,
     });
 
@@ -127,6 +182,7 @@ export async function runExperiment(options: {
         stoppedAtCallLimit: false,
         status: "incomplete",
         incompleteReason: reason,
+        draft: storedDraft(),
       };
     }
 
@@ -143,6 +199,7 @@ export async function runExperiment(options: {
         stoppedAtCallLimit,
         status: "completed",
         incompleteReason: null,
+        draft: storedDraft(),
       };
     }
 
@@ -160,12 +217,23 @@ export async function runExperiment(options: {
 
     input.push(...toResponseInputItems(response.output));
 
+    // parallel_tool_calls is false, so the model is asked for one tool.
+    // A completed response can still list several. Run those in order.
     for (const toolCall of toolCalls) {
       log(
         `[tool] request name=${toolCall.name} call_id=${toolCall.call_id} arguments=${toolCall.arguments}`,
       );
 
-      const outcome = runToolCall(catalog, toolCall.name, toolCall.arguments);
+      const outcome = runToolCall(
+        catalog,
+        toolCall.name,
+        toolCall.arguments,
+        options.request,
+        log,
+      );
+      if (outcome.ok && ("created" in outcome.result || "updated" in outcome.result)) {
+        draftSlug = outcome.result.article.slug;
+      }
       const output = JSON.stringify(outcome);
 
       log(`[tool] result call_id=${toolCall.call_id} ${output}`);
@@ -194,5 +262,6 @@ export async function runExperiment(options: {
     stoppedAtCallLimit,
     status: "completed",
     incompleteReason: null,
+    draft: storedDraft(),
   };
 }

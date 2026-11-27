@@ -4,6 +4,7 @@ export type Article = {
   slug: string;
   title: string;
   summary: string;
+  body: string;
   status: ArticleStatus;
 };
 
@@ -33,6 +34,7 @@ const SEED: readonly Article[] = [
     title: "Beta-Driven Development: An Agentic Architecture for Resource Acquisition",
     summary:
       "Beta is a black-and-white cat specialising in resource acquisition, human interaction, security and operational sustainability.",
+    body: "Beta is a black-and-white cat. This published article is already in the catalog.\n",
     status: "published",
   },
 ];
@@ -63,12 +65,13 @@ export function createDraft(
   slug: string,
   title: string,
   summary: string,
+  body: string,
 ): { ok: true; result: CreateDraftResult } | { ok: false; error: string } {
   if (catalog.some((entry) => entry.slug === slug)) {
     return { ok: false, error: `Slug "${slug}" already exists.` };
   }
 
-  const article: Article = { slug, title, summary, status: "draft" };
+  const article: Article = { slug, title, summary, body, status: "draft" };
   catalog.push(article);
 
   return { ok: true, result: { created: true, article: { ...article } } };

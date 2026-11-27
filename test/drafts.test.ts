@@ -113,6 +113,7 @@ describe("draft tools", () => {
     );
 
     assert.equal(result.finalText, "Created the draft.");
+    assert.deepEqual(result.draft, { ...DRAFT, body: "", status: "draft" });
     assert.deepEqual(
       requests[0]?.tools?.map((tool) => ("name" in tool ? tool.name : "")),
       ["findArticle", "createDraft", "updateDraft"],
@@ -120,12 +121,12 @@ describe("draft tools", () => {
     assert.equal(requests[0]?.tool_choice, "auto");
     assert.deepEqual(parsedOutput(requests[1], "call_create"), {
       ok: true,
-      result: { created: true, article: { ...DRAFT, status: "draft" } },
+      result: { created: true, article: { ...DRAFT, status: "draft", bodyStored: true } },
     });
   });
 
   it("updates a draft when the model requests createDraft and then updateDraft", async () => {
-    const { requests } = await runScript(
+    const { requests, result } = await runScript(
       [
         toolCall("createDraft", "call_create", DRAFT),
         toolCall("updateDraft", "call_update", {
@@ -147,8 +148,16 @@ describe("draft tools", () => {
           title: "Office Notes, revised",
           summary: "A revised draft about the desk.",
           status: "draft",
+          bodyStored: true,
         },
       },
+    });
+    assert.deepEqual(result.draft, {
+      slug: DRAFT.slug,
+      title: "Office Notes, revised",
+      summary: "A revised draft about the desk.",
+      body: "",
+      status: "draft",
     });
   });
 
@@ -214,7 +223,7 @@ describe("draft tools", () => {
     });
     assert.deepEqual(parsedOutput(requests[2], "call_create"), {
       ok: true,
-      result: { created: true, article: { ...DRAFT, status: "draft" } },
+      result: { created: true, article: { ...DRAFT, status: "draft", bodyStored: true } },
     });
   });
 
@@ -274,7 +283,7 @@ describe("draft tools", () => {
       ok: true,
       result: {
         found: true,
-        article: { ...DRAFT, status: "draft" },
+        article: { ...DRAFT, status: "draft", body: "" },
       },
     });
   });

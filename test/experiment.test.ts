@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type OpenAI from "openai";
 import { createCatalog } from "../src/articles";
-import { MAX_MODEL_CALLS, MAX_OUTPUT_TOKENS, runExperiment, type ModelClient } from "../src/experiment";
+import {
+  EXISTING_ARTICLE_MAX_OUTPUT_TOKENS,
+  MAX_MODEL_CALLS,
+  runExperiment,
+  type ModelClient,
+} from "../src/experiment";
 import { runToolCall } from "../src/tools";
 
 /**
@@ -111,6 +116,7 @@ describe("runExperiment", () => {
     assert.equal(result.inputTokens, 31);
     assert.equal(result.outputTokens, 16);
     assert.equal(result.finalText, "Beta-Driven Development is in the mock catalog.");
+    assert.equal(result.draft, null);
     assert.equal(result.stoppedAtCallLimit, false);
     assert.equal(result.status, "completed");
     assert.equal(result.incompleteReason, null);
@@ -321,7 +327,7 @@ describe("runExperiment", () => {
 
     assert.equal(requests.length, 2);
     assert.equal(requests[0]?.model, requestedModel);
-    assert.equal(requests[0]?.max_output_tokens, MAX_OUTPUT_TOKENS);
+    assert.equal(requests[0]?.max_output_tokens, EXISTING_ARTICLE_MAX_OUTPUT_TOKENS);
     assert.equal(requests[0]?.store, false);
     assert.equal(requests[0]?.previous_response_id, undefined);
     assert.equal(result.finalText, "The catalog contains Beta-Driven Development.");
@@ -393,5 +399,133 @@ describe("runExperiment", () => {
         output: JSON.stringify({ ok: false, error: "Arguments are not valid JSON." }),
       },
     ]);
+  });
+
+  it("runs every function call in one completed response in order when parallel tool calls are off", async () => {
+    const draft = {
+      slug: "office-notes",
+      title: "Office Notes",
+      summary: "A draft about the desk.",
+    };
+    const lines: string[] = [];
+    const { client, requests } = scriptedClient([
+      {
+        id: "resp_two",
+        status: "completed",
+        output: [
+          {
+            type: "function_call",
+            call_id: "call_create",
+            name: "createDraft",
+            arguments: JSON.stringify(draft),
+          },
+          {
+            type: "function_call",
+            call_id: "call_update",
+            name: "updateDraft",
+            arguments: JSON.stringify({ ...draft, title: "Office Notes, revised" }),
+          },
+        ],
+        usage: {
+          input_tokens: 11,
+          output_tokens: 7,
+          total_tokens: 18,
+        },
+      } as unknown as OpenAI.Responses.Response,
+      message("Both tools ran."),
+    ]);
+
+    const result = await runExperiment({
+      client,
+      model: "provider/model-name",
+      prompt: "Create a draft and revise its title",
+      log: (line) => lines.push(line),
+    });
+
+    assert.equal(result.finalText, "Both tools ran.");
+    assert.equal(requests[0]?.parallel_tool_calls, false);
+    assert.equal(requests[0]?.max_output_tokens, EXISTING_ARTICLE_MAX_OUTPUT_TOKENS);
+    assert.ok(lines.includes(`[api] max_output_tokens=${EXISTING_ARTICLE_MAX_OUTPUT_TOKENS}`));
+
+    const outputs = toolOutputs(requests[1]);
+    assert.equal(outputs.length, 2);
+    const created = outputs[0];
+    const updated = outputs[1];
+    assert.ok(created && "call_id" in created && created.call_id === "call_create");
+    assert.ok(updated && "call_id" in updated && updated.call_id === "call_update");
+    assert.ok(created && "output" in created && typeof created.output === "string");
+    assert.ok(updated && "output" in updated && typeof updated.output === "string");
+
+    const createdResult = JSON.parse(created.output) as {
+      ok: boolean;
+      result?: { article?: { title?: string; body?: string; bodyStored?: boolean } };
+    };
+    const updatedResult = JSON.parse(updated.output) as {
+      ok: boolean;
+      result?: { article?: { title?: string; body?: string; bodyStored?: boolean } };
+    };
+    assert.equal(createdResult.ok, true);
+    assert.equal(createdResult.result?.article?.body, undefined);
+    assert.equal(createdResult.result?.article?.bodyStored, true);
+    assert.equal(updatedResult.ok, true);
+    assert.equal(updatedResult.result?.article?.title, "Office Notes, revised");
+    assert.equal(updatedResult.result?.article?.bodyStored, true);
+  });
+
+  it("does not execute any function call when an incomplete response contains several", async () => {
+    const lines: string[] = [];
+    const { client, requests } = scriptedClient([
+      {
+        id: "resp_incomplete_many",
+        status: "incomplete",
+        incomplete_details: { reason: "max_output_tokens" },
+        output: [
+          {
+            type: "function_call",
+            call_id: "call_one",
+            name: "createDraft",
+            arguments: JSON.stringify({
+              slug: "first-draft",
+              title: "First",
+              summary: "One",
+            }),
+          },
+          {
+            type: "function_call",
+            call_id: "call_two",
+            name: "createDraft",
+            arguments: JSON.stringify({
+              slug: "second-draft",
+              title: "Second",
+              summary: "Two",
+            }),
+          },
+        ],
+        usage: {
+          input_tokens: 11,
+          output_tokens: 7,
+          total_tokens: 18,
+        },
+      } as unknown as OpenAI.Responses.Response,
+      message("This follow-up must not be requested."),
+    ]);
+
+    const result = await runExperiment({
+      client,
+      model: "provider/model-name",
+      prompt: "Create two drafts",
+      log: (line) => lines.push(line),
+    });
+
+    assert.equal(requests.length, 1);
+    assert.equal(result.status, "incomplete");
+    assert.equal(result.incompleteReason, "max_output_tokens");
+    assert.equal(result.stoppedAtCallLimit, false);
+    assert.ok(lines.includes("[incomplete] did not execute call_id=call_one"));
+    assert.ok(lines.includes("[incomplete] did not execute call_id=call_two"));
+    assert.equal(
+      lines.some((line) => line.startsWith("[tool] result")),
+      false,
+    );
   });
 });

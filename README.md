@@ -1,8 +1,8 @@
-# Agentic Publishing Lab — Step 2
+# Agentic Publishing Lab — Step 3.3
 
 A minimal Node.js and TypeScript program that shows function calling with the Responses API. It uses the official OpenAI SDK. Set `OPENAI_BASE_URL` to point that same client at OpenRouter.
 
-The tools are `findArticle`, `createDraft`, and `updateDraft`. Each run gets its own in-memory catalog, seeded with the published article `beta-driven-development`. The model chooses which tools to call and in which order. The backend validates arguments and applies the catalog rules. There is no publish tool. The program does not connect to a blog, Cloudinary, or any other service, and the tests never call the API.
+The tools are `findArticle`, `createDraft`, and `updateDraft`. Each run gets its own in-memory catalog, seeded with the published article `beta-driven-development`. Articles now include a body. The model chooses which tools to call and in which order. The backend validates arguments and applies the catalog rules. There is no publish tool. The program does not connect to a blog, Cloudinary, or any other service, and the tests never call the API.
 
 Running `npm start` is manual. Each run sends your prompt to the configured provider and can incur a small charge. It makes at most five Responses API calls. There is no fallback model.
 
@@ -16,16 +16,19 @@ agentic-publishing-lab/
 ├── tsconfig.json
 ├── README.md
 ├── src/
-│   ├── articles.ts          # per-run catalog, find, create draft, update draft
+│   ├── articles.ts          # per-run catalog, including article body
 │   ├── config.ts            # API key, model, optional base URL
+│   ├── editorial.ts         # existing and generate modes, Markdown file loading
 │   ├── tools.ts             # strict tool schemas, argument checks, backend execution
 │   ├── experiment.ts        # prompt → model → whichever tool it requested → model
 │   └── index.ts             # terminal entry; the only file that creates an OpenAI client
 └── test/
     ├── config.test.ts       # official API and OpenRouter base URL
     ├── drafts.test.ts       # create, update, duplicates, and invalid draft arguments
+    ├── editorial.test.ts    # supplied body, generated body, and invalid editorial input
+    ├── fixtures/supplied-article.md
     ├── findArticle.test.ts  # existing article, missing article, invalid arguments
-    └── experiment.test.ts   # call id, five-call limit, and OpenRouter response fixtures
+    └── experiment.test.ts   # call id, five-call limit, incomplete responses, OpenRouter fixtures
 ```
 
 ## Setup
@@ -82,11 +85,52 @@ The program will:
 4. Check the arguments locally.
 5. Run that tool only when the arguments are valid and the catalog rule allows it. Creating a duplicate slug is rejected. Updating a missing or published article is rejected.
 6. Send that result back with the model's `call_id`.
-7. Print the model's final text.
+7. Print the model's short summary. When this run stored a draft, print that article from the catalog after the summary.
 
 It also prints each tool request, each tool result, the API call count, and input and output tokens.
 
-SDK retries are off (`maxRetries: 0`). Each response is capped at 512 output tokens. The loop stops after five model calls. If the fifth response is still a tool call, that call is logged and the tool is not executed, because sending the result would take a sixth model call. A response with status `incomplete` is also not used for tool execution. The terminal prints that status and the provider's reason, and the same fields are on the experiment result. Input and output tokens are logged for every response.
+## Editorial modes
+
+Editorial generation is the writing task. Agentic orchestration is the model deciding which catalog tools to call, and in which order. The backend still authorises every call. It does not ask the model to copy an existing article into the draft.
+
+The instructions ask the model not to call `findArticle` immediately after a successful `createDraft`, unless the user explicitly asked to read the stored article. They also ask for a short completion summary instead of a copy of the article body. Tool choice stays on `auto`. The experiment result includes the last draft successfully created or updated in the run, copied from the catalog. The terminal prints that stored article, not text regenerated in the model's final reply.
+
+### Existing article
+
+The user supplies a Markdown file and publishing instructions. Optional context can be added. The model may propose a title, slug, and summary. `createDraft` does not accept a body argument. The backend attaches the file text, unchanged, to the new draft. A tool argument named `body` is rejected, and `updateDraft` cannot change the body either.
+
+```bash
+npm start -- --mode existing --file article.md --instructions "Propose a title, slug, and summary."
+npm start -- --mode existing --file article.md --instructions "Propose a title, slug, and summary." --context "Audience is the lab."
+```
+
+### Generate article
+
+The user supplies an editorial prompt, an optional length, and optional context. The model writes the article. `createDraft` requires slug, title, summary, and body. The backend stores that body only when every field is a non-empty string and the article is not longer than the selected maximum. It does not shorten the text.
+
+`--length` accepts `short`, `medium`, or `long`. Omitting it selects medium. The word range is part of the editorial instructions. The backend picks the output-token budget from that same preset:
+
+| Length | Words | Output tokens per call |
+| --- | --- | --- |
+| short | 150–300 | 2048 |
+| medium | 300–600 | 4096 |
+| long | 600–1000 | 8192 |
+
+An article over the maximum is not stored. The tool result is `{ ok: false, error, validation }` with `validation.code` set to `too_long`, plus the length, the actual word count, and the maximum. The process logs `[article] length=...`, `[api] max_output_tokens=...`, and `[article] words=...`.
+
+```bash
+npm start -- --mode generate --prompt "Write about Beta the cat."
+npm start -- --mode generate --prompt "Write about Beta the cat." --length short
+npm start -- --mode generate --prompt "Write about Beta the cat." --length long --context "Mention resource acquisition."
+```
+
+Published articles still cannot be updated. Duplicate slugs are still rejected. Incomplete responses still do not execute tools. The five-call limit and disabled retries are unchanged.
+
+`createDraft` and `updateDraft` results sent back to the model do not repeat the article body. They include slug, title, summary, status, and `bodyStored: true`. The catalog still keeps the complete body. `findArticle` returns that body.
+
+Each request sets `parallel_tool_calls` to false, so the model is asked for one tool call. If a completed response still contains several function calls, the backend runs them in that order and returns each result with its own `call_id`. An incomplete response does not run any of them. The last of the five model calls does not run them either.
+
+SDK retries are off (`maxRetries: 0`). Existing-article mode, and a run that is not an editorial generate request, caps each response at 512 output tokens. Generate-article mode uses 2048, 4096, or 8192 output tokens according to the length preset above. The process logs the limit it actually sends as `[api] max_output_tokens=...`. The loop stops after five model calls. If the fifth response is still a tool call, that call is logged and the tool is not executed, because sending the result would take a sixth model call. A response with status `incomplete` is also not used for tool execution. The terminal prints that status and the provider's reason, and the same fields are on the experiment result. Input and output tokens are logged for every response.
 
 ## Live OpenRouter observations
 
@@ -124,6 +168,28 @@ These are manual OpenRouter runs of `findArticle`, `createDraft`, and `updateDra
 
 The model inspected `beta-driven-development` with `findArticle` and then chose not to call `updateDraft`. The published article stayed unchanged because no update was requested. This run did not exercise backend rejection. The deterministic tests still send a fake `updateDraft` for that published slug and require the backend to reject it.
 
+## Live editorial observations
+
+These are two manual runs after editorial modes were added. They are observations from those runs, not a reliability benchmark. The logs did not record model names or token totals for either run.
+
+### Existing article
+
+Existing-article mode was run with the local file `article.md`, "The Sacred Belly Protocol". The model was asked for metadata only. The backend attached the file body. That tool-call shape fits the 512 output-token cap, which stays the limit for this mode.
+
+### Incomplete generation attempt
+
+A generate-article run returned status `incomplete` with reason `max_output_tokens` while every mode still used the 512 output-token cap. The model had to write the article body inside the `createDraft` arguments, and that response did not finish. No tool call from the incomplete response was executed, so no generated draft was stored. Generate-article mode now selects 2048, 4096, or 8192 output tokens from the length preset. Existing-article mode remains at 512.
+
+### Short article, 199 words
+
+A generate-article run with the short length preset finished successfully. The stored article was 199 words. The run used 4 API calls, 8213 input tokens, and 1889 output tokens.
+
+### Short article, 241 words
+
+A later generate-article run with the short length preset finished successfully. The stored article was 241 words. The run used 3 API calls, 5064 input tokens, and 2258 output tokens.
+
+The 199-word run used more API calls and more input tokens. The 241-word run used fewer calls and fewer input tokens, with more output tokens. Automatic model routing chooses the model for each call, so these runs were not held to one model. The figures are two observations. They are not a controlled performance comparison.
+
 ## Tests
 
 ```bash
@@ -135,4 +201,4 @@ npm run typecheck
 
 ## Stop
 
-This repository stops at Step 2. Drafts stay in memory for one run. Nothing is published.
+This repository stops at Step 3.3. Drafts stay in memory for one run. Nothing is published.

@@ -3,7 +3,8 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import OpenAI from "openai";
 import { openAIClientOptions, readConfig } from "./config";
-import { runExperiment } from "./experiment";
+import { parseCli, type EditorialRequest } from "./editorial";
+import { formatRunOutput, runExperiment } from "./experiment";
 
 /**
  * Manual entry point. This is the only file that constructs an OpenAI client.
@@ -48,11 +49,11 @@ function loadLocalEnv(): void {
   }
 }
 
-async function readPrompt(): Promise<string> {
-  const fromArgs = process.argv.slice(2).join(" ").trim();
+async function readRun(): Promise<{ prompt: string; request?: EditorialRequest }> {
+  const argv = process.argv.slice(2);
 
-  if (fromArgs) {
-    return fromArgs;
+  if (argv.length > 0) {
+    return parseCli(argv);
   }
 
   if (!input.isTTY) {
@@ -63,7 +64,7 @@ async function readPrompt(): Promise<string> {
 
   try {
     const line = await rl.question("Prompt: ");
-    return line.trim();
+    return { prompt: line.trim() };
   } finally {
     rl.close();
   }
@@ -72,9 +73,9 @@ async function readPrompt(): Promise<string> {
 async function main(): Promise<void> {
   loadLocalEnv();
 
-  const prompt = await readPrompt();
+  const run = await readRun();
 
-  if (!prompt) {
+  if (!run.prompt) {
     throw new Error("Prompt is empty. No API request was sent.");
   }
 
@@ -85,14 +86,22 @@ async function main(): Promise<void> {
   if (config.baseURL) {
     console.log(`[config] base_url=${config.baseURL}`);
   }
+  if (run.request) {
+    console.log(`[config] mode=${run.request.mode}`);
+  }
 
-  const result = await runExperiment({ client, model: config.model, prompt });
+  const result = await runExperiment({
+    client,
+    model: config.model,
+    prompt: run.prompt,
+    request: run.request,
+  });
 
   console.log(
     `[result] status=${result.status} incomplete_reason=${result.incompleteReason ?? "none"}`,
   );
   console.log("");
-  console.log(result.finalText);
+  console.log(formatRunOutput(result));
 }
 
 main().catch((error: unknown) => {
