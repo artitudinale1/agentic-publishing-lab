@@ -191,7 +191,7 @@ npm start -- --target live --mode generate --prompt "Write about Beta the cat." 
 
 Each request sets `parallel_tool_calls` to false, so the model is asked for one tool call. If a completed response still contains several function calls, the backend runs them in that order and returns each result with its own `call_id`. An incomplete response does not run any of them. The last of the five model calls does not run them either.
 
-SDK retries are off (`maxRetries: 0`). Existing-article mode, and a run that is not an editorial generate request, caps each response at 512 output tokens. Generate-article mode uses 2048, 4096, or 8192 output tokens according to the length preset above. The process logs the limit it actually sends as `[api] max_output_tokens=...`. The loop stops after five model calls. If the fifth response is still a tool call, that call is logged and the tool is not executed, because sending the result would take a sixth model call. A response with status `incomplete` is also not used for tool execution. The terminal prints that status and the provider's reason, and the same fields are on the experiment result. Input and output tokens are logged for every response.
+SDK retries are off (`maxRetries: 0`). Existing-article mode, and a run that is not an editorial generate request, caps each response at 2048 output tokens. Generate-article mode uses 2048, 4096, or 8192 output tokens according to the length preset above. The process logs the limit it actually sends as `[api] max_output_tokens=...`. The loop stops after five model calls. If the fifth response is still a tool call, that call is logged and the tool is not executed, because sending the result would take a sixth model call. A response with status `incomplete` is also not used for tool execution. The terminal prints that status and the provider's reason, and the same fields are on the experiment result. Input and output tokens are logged for every response.
 
 ## Live OpenRouter observations
 
@@ -235,11 +235,11 @@ These are two manual runs after editorial modes were added. They are observation
 
 ### Existing article
 
-Existing-article mode was run with the local file `article.md`, "The Sacred Belly Protocol". The model was asked for metadata only. The backend attached the file body. That tool-call shape fits the 512 output-token cap, which stays the limit for this mode.
+Existing-article mode was run with the local file `article.md`, "The Sacred Belly Protocol". The model was asked for metadata only. The backend attached the file body. That tool-call shape fitted the 512 output-token cap used for this run. Existing-article mode now allows 2048 output tokens per call.
 
 ### Incomplete generation attempt
 
-A generate-article run returned status `incomplete` with reason `max_output_tokens` while every mode still used the 512 output-token cap. The model had to write the article body inside the `createDraft` arguments, and that response did not finish. No tool call from the incomplete response was executed, so no generated draft was stored. Generate-article mode now selects 2048, 4096, or 8192 output tokens from the length preset. Existing-article mode remains at 512.
+A generate-article run returned status `incomplete` with reason `max_output_tokens` while every mode still used the 512 output-token cap. The model had to write the article body inside the `createDraft` arguments, and that response did not finish. No tool call from the incomplete response was executed, so no generated draft was stored. Generate-article mode now selects 2048, 4096, or 8192 output tokens from the length preset. Existing-article mode allows 2048 output tokens per call.
 
 ### Short article, 199 words
 

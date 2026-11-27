@@ -13,7 +13,7 @@ import { articleTools, runToolCall, toolsFor } from "./tools.js";
 export const MAX_MODEL_CALLS = 5;
 
 /** Existing-article mode, and runs that are not an editorial generate request. */
-export const EXISTING_ARTICLE_MAX_OUTPUT_TOKENS = 512;
+export const EXISTING_ARTICLE_MAX_OUTPUT_TOKENS = 2048;
 
 export function maxOutputTokens(request?: EditorialRequest): number {
   if (request?.mode === "generate") {

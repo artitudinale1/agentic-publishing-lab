@@ -209,7 +209,7 @@ describe("runExperiment", () => {
     });
 
     assert.equal(requests.length, 2);
-    assert.equal(requests[1]?.max_output_tokens, 512);
+    assert.equal(requests[1]?.max_output_tokens, EXISTING_ARTICLE_MAX_OUTPUT_TOKENS);
     assert.equal(result.apiCalls, 2);
     assert.equal(result.status, "incomplete");
     assert.equal(result.incompleteReason, "max_output_tokens");
