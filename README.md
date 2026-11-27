@@ -1,4 +1,4 @@
-# Agentic Publishing Lab — Step 5B
+# Agentic Publishing Lab — Step 6A
 
 A minimal Node.js and TypeScript program that shows function calling with the Responses API. It uses the official OpenAI SDK. Set `OPENAI_BASE_URL` to point that same client at OpenRouter.
 
@@ -161,6 +161,19 @@ npm start -- --target mock --mode generate --prompt "Write about Beta the cat." 
 npm start -- --target live --mode generate --prompt "Write about Beta the cat." --length short --category CATS
 ```
 
+### Cover image
+
+`--cover <local-file>` is optional in both editorial modes. The path comes from that flag. The model cannot choose a file. The file must be a JPEG, PNG, or WebP image of at most 5 MB, checked from its contents as well as its extension.
+
+Mock mode does not contact Cloudinary. Live mode reads `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET` before any model call when a cover was supplied. The upload runs only after the agent run finishes and the backend accepts the draft. It uses the Cloudinary SDK, stores the file in `alex-blog/agentic-lab`, and is not retried. The returned `https` URL is sent as `coverImageUrl` on `createPost`. The article Markdown is still sent unchanged.
+
+If the upload or the following `createPost` does not finish, the result says an asset may remain in Cloudinary. This program does not delete it.
+
+```bash
+npm start -- --target mock --mode existing --file article.md --instructions "Propose a title, slug, and summary." --cover cover.webp
+npm start -- --target live --mode existing --file article.md --instructions "Propose a title, slug, and summary." --cover cover.webp
+```
+
 Each request sets `parallel_tool_calls` to false, so the model is asked for one tool call. If a completed response still contains several function calls, the backend runs them in that order and returns each result with its own `call_id`. An incomplete response does not run any of them. The last of the five model calls does not run them either.
 
 SDK retries are off (`maxRetries: 0`). Existing-article mode, and a run that is not an editorial generate request, caps each response at 512 output tokens. Generate-article mode uses 2048, 4096, or 8192 output tokens according to the length preset above. The process logs the limit it actually sends as `[api] max_output_tokens=...`. The loop stops after five model calls. If the fifth response is still a tool call, that call is logged and the tool is not executed, because sending the result would take a sixth model call. A response with status `incomplete` is also not used for tool execution. The terminal prints that status and the provider's reason, and the same fields are on the experiment result. Input and output tokens are logged for every response.
@@ -261,6 +274,25 @@ The article was "The Sacred Belly Protocol", in existing-article mode. The backe
 | Tool sequence | `createDraft`, `validateArticle` |
 | Remote status | DRAFT |
 
+## Live Cloudinary integration
+
+This is the first successful manual run that stored a generated draft with a cover image. It is an observation from that run, not a reliability benchmark. `--target mock` remains the default. This run set `--target live`.
+
+The article was generated in generate mode, category `CODE`, 189 words. Article validation passed. The cover was uploaded to Cloudinary and the returned URL was stored with the draft. The generated content and the cover image were visible in the existing blog editor. The agent did not publish the draft.
+
+| | |
+|---|---|
+| Mode | generate |
+| Target | live |
+| Slug | beta-security-image-lab |
+| Category | CODE |
+| Word count | 189 |
+| API calls | 4 |
+| Input tokens | 6770 |
+| Output tokens | 2044 |
+| Validation | passed |
+| Cover | visible in the blog editor |
+
 ## Tests
 
 ```bash
@@ -272,4 +304,4 @@ npm run typecheck
 
 ## Stop
 
-This repository stops at Step 5B. Mock runs keep drafts in memory. Live runs can store a validated draft only. The agent cannot publish.
+This repository stops at Step 6A. Mock runs keep drafts in memory and do not upload covers. Live runs can store a validated draft, with an optional cover URL. The agent cannot publish.

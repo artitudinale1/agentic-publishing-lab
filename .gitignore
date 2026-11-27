@@ -10,3 +10,5 @@ id_ed25519
 credentials.json
 **/credentials.json
 *.log
+article.md
+src/beta.jpg

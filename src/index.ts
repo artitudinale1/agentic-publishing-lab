@@ -1,10 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import OpenAI from "openai";
 import { createBlogClient, persistValidatedDraft, readBlogConfig } from "./blog";
+import { createCloudinaryUploader, inspectCoverFile, readCloudinaryConfig } from "./cover";
 import { openAIClientOptions, readConfig } from "./config";
-import { parseCli, type EditorialRequest, type RunTarget } from "./editorial";
+import { parseCli, type CliRun } from "./editorial";
 import { formatRunOutput, runExperiment } from "./experiment";
 
 /**
@@ -50,7 +52,7 @@ function loadLocalEnv(): void {
   }
 }
 
-async function readRun(): Promise<{ prompt: string; request?: EditorialRequest; target: RunTarget }> {
+async function readRun(): Promise<CliRun> {
   const argv = process.argv.slice(2);
 
   if (argv.length > 0) {
@@ -80,7 +82,13 @@ async function main(): Promise<void> {
     throw new Error("Prompt is empty. No API request was sent.");
   }
 
+  if (run.coverPath) {
+    inspectCoverFile(run.coverPath);
+  }
+
   const blogConfig = run.target === "live" ? readBlogConfig(process.env) : undefined;
+  const cloudinaryConfig =
+    run.target === "live" && run.coverPath ? readCloudinaryConfig(process.env) : undefined;
   const config = readConfig(process.env);
   const client = new OpenAI(openAIClientOptions(config));
 
@@ -95,8 +103,12 @@ async function main(): Promise<void> {
     }
   }
   console.log(`[config] target=${run.target}`);
+  if (run.coverPath) {
+    console.log(`[config] cover=${basename(run.coverPath)}`);
+  }
 
   const blog = blogConfig ? createBlogClient(blogConfig) : undefined;
+  const uploadCover = cloudinaryConfig ? createCloudinaryUploader(cloudinaryConfig) : undefined;
 
   const result = await runExperiment({
     client,
@@ -118,6 +130,8 @@ async function main(): Promise<void> {
     status: result.status,
     stoppedAtCallLimit: result.stoppedAtCallLimit,
     client: blog,
+    coverPath: run.coverPath,
+    uploadCover,
   });
 }
 
