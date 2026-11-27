@@ -34,6 +34,24 @@ const INSTRUCTIONS = [
 ].join(" ");
 
 function outputText(response: OpenAI.Responses.Response): string {
+  const parts: string[] = [];
+
+  for (const item of response.output) {
+    if (item.type !== "message") {
+      continue;
+    }
+
+    for (const content of item.content) {
+      if (content.type === "output_text") {
+        parts.push(content.text);
+      }
+    }
+  }
+
+  if (parts.length > 0) {
+    return parts.join("");
+  }
+
   if (typeof response.output_text === "string") {
     return response.output_text;
   }
@@ -74,7 +92,9 @@ export async function runExperiment(options: {
     inputTokens += usedInput;
     outputTokens += usedOutput;
 
+    const returnedModel = response.model?.trim() ?? "";
     log(`[api] call ${callNumber} of ${MAX_MODEL_CALLS}`);
+    log(`[api] model=${returnedModel || "unavailable"}`);
     log(`[api] input_tokens=${usedInput} output_tokens=${usedOutput}`);
 
     if (response.status === "incomplete") {
@@ -97,9 +117,19 @@ export async function runExperiment(options: {
       };
     }
 
-    input.push(...toResponseInputItems(response.output));
+    if (callNumber === MAX_MODEL_CALLS) {
+      stoppedAtCallLimit = true;
+      for (const toolCall of toolCalls) {
+        log(
+          `[tool] request name=${toolCall.name} call_id=${toolCall.call_id} arguments=${toolCall.arguments}`,
+        );
+        log(`[limit] model call limit reached; did not execute call_id=${toolCall.call_id}`);
+      }
+      finalText = outputText(response);
+      break;
+    }
 
-    const atLimit = callNumber === MAX_MODEL_CALLS;
+    input.push(...toResponseInputItems(response.output));
 
     for (const toolCall of toolCalls) {
       log(
@@ -111,24 +141,11 @@ export async function runExperiment(options: {
 
       log(`[tool] result call_id=${toolCall.call_id} ${output}`);
 
-      if (atLimit) {
-        stoppedAtCallLimit = true;
-        log(
-          `[limit] model call limit reached; tool result for ${toolCall.call_id} was not sent back`,
-        );
-        continue;
-      }
-
       input.push({
         type: "function_call_output",
         call_id: toolCall.call_id,
         output,
       });
-    }
-
-    if (atLimit) {
-      finalText = outputText(response);
-      break;
     }
   }
 

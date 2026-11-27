@@ -2,17 +2,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import OpenAI from "openai";
+import { openAIClientOptions, readConfig } from "./config";
 import { runExperiment } from "./experiment";
 
 /**
  * Manual entry point. This is the only file that constructs an OpenAI client.
  * Tests do not import it, and nothing here runs unless you start the program.
  */
-
-type Config = {
-  apiKey: string;
-  model: string;
-};
 
 /** Load `.env` from the current directory. Existing shell variables win. */
 function loadLocalEnv(): void {
@@ -52,21 +48,6 @@ function loadLocalEnv(): void {
   }
 }
 
-function readConfig(env: NodeJS.ProcessEnv): Config {
-  const apiKey = env.OPENAI_API_KEY?.trim() ?? "";
-  const model = env.OPENAI_MODEL?.trim() ?? "";
-
-  if (!apiKey || apiKey === "replace-me") {
-    throw new Error("Set OPENAI_API_KEY. Copy .env.example to .env and add your key.");
-  }
-
-  if (!model) {
-    throw new Error("Set OPENAI_MODEL. Copy .env.example to .env and choose a model.");
-  }
-
-  return { apiKey, model };
-}
-
 async function readPrompt(): Promise<string> {
   const fromArgs = process.argv.slice(2).join(" ").trim();
 
@@ -97,15 +78,15 @@ async function main(): Promise<void> {
     throw new Error("Prompt is empty. No API request was sent.");
   }
 
-  const { apiKey, model } = readConfig(process.env);
-  const client = new OpenAI({
-    apiKey,
-    maxRetries: 0,
-  });
+  const config = readConfig(process.env);
+  const client = new OpenAI(openAIClientOptions(config));
 
-  console.log(`[config] model=${model} max_retries=0`);
+  console.log(`[config] requested_model=${config.model} max_retries=0`);
+  if (config.baseURL) {
+    console.log(`[config] base_url=${config.baseURL}`);
+  }
 
-  const result = await runExperiment({ client, model, prompt });
+  const result = await runExperiment({ client, model: config.model, prompt });
 
   console.log("");
   console.log(result.finalText);
