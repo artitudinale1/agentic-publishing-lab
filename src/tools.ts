@@ -16,6 +16,7 @@ import {
   type ArticleLength,
   type EditorialRequest,
 } from "./editorial";
+import { validateArticleMarkdown } from "./images";
 import { validateStoredArticle, type ValidationIssue, type ValidationSuccess } from "./validation";
 
 /**
@@ -270,6 +271,13 @@ export function runToolCall(
         : request?.mode === "generate"
           ? field(parsed.values, "body")
           : "";
+
+    if (request?.mode === "generate" || request?.mode === "existing") {
+      const references = validateArticleMarkdown(body, request.images ?? [], request.mode);
+      if (!references.ok) {
+        return { ok: false, error: references.message };
+      }
+    }
 
     if (request?.mode === "generate") {
       const length = resolveArticleLength(request.length);

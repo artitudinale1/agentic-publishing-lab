@@ -2,6 +2,7 @@ import type { Article, ArticleCategory } from "./articles";
 import type { CoverUploader } from "./cover";
 import { inspectCoverFile } from "./cover";
 import type { EditorialRequest, RunTarget } from "./editorial";
+import { replaceImagePlaceholders, validateArticleMarkdown, validateResolvedMarkdown, type InlineImage } from "./images";
 import { validateStoredArticle } from "./validation";
 
 /** One GraphQL request. Mutations are not retried. */
@@ -288,6 +289,8 @@ export async function persistValidatedDraft(options: {
   client?: ReturnType<typeof createBlogClient>;
   coverPath?: string;
   uploadCover?: CoverUploader;
+  images?: readonly InlineImage[];
+  uploadInline?: CoverUploader;
   log?: (line: string) => void;
 }): Promise<PersistenceReport> {
   const log = options.log ?? ((line: string) => console.log(line));
@@ -317,12 +320,17 @@ export async function persistValidatedDraft(options: {
     return report;
   }
 
+  const imageCheck = validateArticleMarkdown(options.draft.body, options.images ?? [], options.request?.mode);
+  if (!imageCheck.ok) {
+    const report = { persisted: false, message: imageCheck.message };
+    log(`[blog] ${report.message}`);
+    return report;
+  }
+
   if (options.target === "mock") {
     const report = {
       persisted: false,
-      message: options.coverPath
-        ? "Mock target kept the validated draft in memory. The cover image was not uploaded."
-        : "Mock target kept the validated draft in memory.",
+      message: mockMessage(Boolean(options.coverPath), (options.images?.length ?? 0) > 0),
     };
     log(`[blog] ${report.message}`);
     return report;
@@ -342,9 +350,7 @@ export async function persistValidatedDraft(options: {
   if (lookup.status === "found") {
     const report = {
       persisted: false,
-      message: options.coverPath
-        ? `Remote slug "${options.draft.slug}" already exists. It was not overwritten. The cover image was not uploaded.`
-        : `Remote slug "${options.draft.slug}" already exists. It was not overwritten.`,
+      message: existingSlugMessage(options.draft.slug, Boolean(options.coverPath), (options.images?.length ?? 0) > 0),
     };
     log(`[blog] ${report.message}`);
     return report;
@@ -374,7 +380,61 @@ export async function persistValidatedDraft(options: {
     coverImageUrl = uploaded.secureUrl;
   }
 
-  const created = await options.client.createDraft(options.draft, coverImageUrl);
+  const inlineUrls = new Map<string, string>();
+  const uploadedInline: string[] = [];
+  if (imageCheck.referencedIds.length > 0) {
+    if (!options.uploadInline) {
+      throw new Error("Live mode with inline images requires Cloudinary configuration.");
+    }
+
+    const byId = new Map((options.images ?? []).map((image) => [image.id, image]));
+    for (const id of imageCheck.referencedIds) {
+      const image = byId.get(id);
+      if (!image) {
+        const report = { persisted: false, message: orphanMessage(`Unknown image reference: image:${id}.`, coverImageUrl, uploadedInline) };
+        log(`[blog] ${report.message}`);
+        return report;
+      }
+
+      try {
+        inspectCoverFile(image.path, "Inline image");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Inline image could not be read.";
+        const report = { persisted: false, message: orphanMessage(message, coverImageUrl, uploadedInline) };
+        log(`[blog] ${report.message}`);
+        return report;
+      }
+
+      const uploaded = await options.uploadInline(image.path);
+      if (uploaded.status !== "uploaded") {
+        const report = { persisted: false, message: orphanMessage(uploaded.message, coverImageUrl, uploadedInline) };
+        log(`[blog] ${report.message}`);
+        return report;
+      }
+      inlineUrls.set(id, uploaded.secureUrl);
+      uploadedInline.push(uploaded.secureUrl);
+    }
+  }
+
+  let remoteBody: string;
+  try {
+    remoteBody = replaceImagePlaceholders(options.draft.body, inlineUrls);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Inline image URL was rejected.";
+    const report = { persisted: false, message: orphanMessage(message, coverImageUrl, uploadedInline) };
+    log(`[blog] ${report.message}`);
+    return report;
+  }
+
+  const resolved = validateResolvedMarkdown(remoteBody);
+  if (!resolved.ok) {
+    const report = { persisted: false, message: orphanMessage(resolved.message, coverImageUrl, uploadedInline) };
+    log(`[blog] ${report.message}`);
+    return report;
+  }
+
+  const remoteDraft = remoteBody === options.draft.body ? options.draft : { ...options.draft, body: remoteBody };
+  const created = await options.client.createDraft(remoteDraft, coverImageUrl);
   if (created.status === "created") {
     const report = {
       persisted: true,
@@ -384,9 +444,42 @@ export async function persistValidatedDraft(options: {
     return report;
   }
 
-  const report = { persisted: false, message: created.message };
+  const report = { persisted: false, message: orphanMessage(created.message, undefined, uploadedInline) };
   log(`[blog] ${report.message}`);
   return report;
+}
+
+function mockMessage(hasCover: boolean, hasInline: boolean): string {
+  const notes = ["Mock target kept the validated draft in memory."];
+  if (hasCover) {
+    notes.push("The cover image was not uploaded.");
+  }
+  if (hasInline) {
+    notes.push("Inline images were not uploaded.");
+  }
+  return notes.join(" ");
+}
+
+function existingSlugMessage(slug: string, hasCover: boolean, hasInline: boolean): string {
+  const notes = [`Remote slug "${slug}" already exists. It was not overwritten.`];
+  if (hasCover) {
+    notes.push("The cover image was not uploaded.");
+  }
+  if (hasInline) {
+    notes.push("Inline images were not uploaded.");
+  }
+  return notes.join(" ");
+}
+
+function orphanMessage(message: string, coverImageUrl: string | undefined, inlineUrls: readonly string[]): string {
+  const notes = [message];
+  if (coverImageUrl) {
+    notes.push(`The uploaded asset at ${coverImageUrl} may be unused and was not deleted.`);
+  }
+  if (inlineUrls.length > 0) {
+    notes.push(`Uploaded inline images may be unused and were not deleted: ${inlineUrls.join(", ")}.`);
+  }
+  return notes.join(" ");
 }
 
 async function classifyResponse<T>(response: Response, kind: "query" | "mutation"): Promise<CallSuccess<T> | CallFailure> {

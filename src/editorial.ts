@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isArticleCategory, type ArticleCategory } from "./articles";
+import { MAX_INLINE_IMAGES, type InlineImage, type InlineImagePrompt } from "./images";
 
 /**
  * An explicit editorial task. Orchestration stays with the model;
@@ -34,6 +35,7 @@ export type EditorialRequest =
       body: string;
       context?: string;
       category?: ArticleCategory;
+      images?: readonly InlineImagePrompt[];
     }
   | {
       mode: "generate";
@@ -41,6 +43,7 @@ export type EditorialRequest =
       context?: string;
       length?: ArticleLength;
       category?: ArticleCategory;
+      images?: readonly InlineImagePrompt[];
     };
 
 export type RunTarget = "mock" | "live";
@@ -50,10 +53,11 @@ export type CliRun = {
   request?: EditorialRequest;
   target: RunTarget;
   coverPath?: string;
+  images?: readonly InlineImage[];
 };
 
-const EXISTING_FLAGS = ["mode", "file", "instructions", "context", "category", "target", "cover"];
-const GENERATE_FLAGS = ["mode", "prompt", "context", "length", "category", "target", "cover"];
+const EXISTING_FLAGS = ["mode", "file", "instructions", "context", "category", "target", "cover", "image", "image-description"];
+const GENERATE_FLAGS = ["mode", "prompt", "context", "length", "category", "target", "cover", "image", "image-description"];
 
 function flagValue(argv: string[], name: string): string | undefined {
   const index = argv.indexOf(`--${name}`);
@@ -67,6 +71,26 @@ function flagValue(argv: string[], name: string): string | undefined {
   }
 
   return value;
+}
+
+function flagValues(argv: string[], name: string): string[] {
+  const values: string[] = [];
+
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] !== `--${name}`) {
+      continue;
+    }
+
+    const value = argv[index + 1];
+    if (value === undefined || value.startsWith("--")) {
+      throw new Error(`Missing value for --${name}.`);
+    }
+
+    values.push(value);
+    index += 1;
+  }
+
+  return values;
 }
 
 function rejectUnknownFlags(argv: string[], allowed: readonly string[]): void {
@@ -202,11 +226,11 @@ export function modelPrompt(request: EditorialRequest): string {
       "",
       "Supplied article body:",
       request.body,
-    ].join("\n");
+    ].join("\n") + imagePromptSection(request.images);
   }
 
   const context = request.context ? `\n\nContext:\n${request.context}` : "";
-  return `Editorial prompt:\n${request.prompt}${context}`;
+  return `Editorial prompt:\n${request.prompt}${context}${imagePromptSection(request.images)}`;
 }
 
 export function instructionsFor(request: EditorialRequest): string {
@@ -233,6 +257,7 @@ export function instructionsFor(request: EditorialRequest): string {
       "createDraft accepts only slug, title, and summary.",
       "Do not send the article body as a tool argument. The backend attaches the original body.",
       "updateDraft cannot change the body.",
+      ...imageRules(request),
     ].join(" ");
   }
 
@@ -246,7 +271,42 @@ export function instructionsFor(request: EditorialRequest): string {
     `The backend stores that body only when the arguments are valid and the article does not exceed ${preset.maxWords} words.`,
     "The backend does not shorten an article that is too long.",
     "updateDraft cannot change the body.",
+    "Write Markdown the blog renderer supports: paragraphs, headings with one to three hashes, lists, quotes, fenced code, links, and bold or italic.",
+    "Japanese readings use <ruby>base<rt>reading</rt></ruby> only. Do not use other HTML.",
+    ...imageRules(request),
   ].join(" ");
+}
+
+function imagePromptSection(images: readonly InlineImagePrompt[] | undefined): string {
+  if (!images || images.length === 0) {
+    return "";
+  }
+
+  const lines = images.map((image) => (image.description ? `- ${image.id}: ${image.description}` : `- ${image.id}`));
+  return `\n\nInline images:\n${lines.join("\n")}`;
+}
+
+function imageRules(request: EditorialRequest): string[] {
+  const images = request.images ?? [];
+  if (images.length === 0) {
+    return [];
+  }
+
+  if (request.mode === "existing") {
+    return [
+      "The supplied article may contain placeholders such as image:image-1.",
+      "Leave those placeholders as they are.",
+      "Do not invent image URLs or file paths.",
+    ];
+  }
+
+  return [
+    "Embed every supplied image with Markdown such as ![descriptive alt text](image:image-1).",
+    "Choose where each image belongs.",
+    "Write the alt text from that image's description.",
+    "The destination must be the assigned image id, not a URL or file path.",
+    "Do not invent image URLs or file paths.",
+  ];
 }
 
 function readTarget(argv: string[]): RunTarget {
@@ -271,7 +331,7 @@ function promptWithoutRunFlags(argv: string[]): string {
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
-    if (token === "--target" || token === "--cover") {
+    if (token === "--target" || token === "--cover" || token === "--image" || token === "--image-description") {
       index += 1;
       continue;
     }
@@ -284,8 +344,48 @@ function promptWithoutRunFlags(argv: string[]): string {
   return parts.join(" ").trim();
 }
 
+function readInlineImages(argv: string[], mode: "existing" | "generate"): InlineImage[] {
+  const paths = flagValues(argv, "image");
+  const descriptions = flagValues(argv, "image-description");
+
+  if (paths.length > MAX_INLINE_IMAGES) {
+    throw new Error("At most five inline images can be supplied.");
+  }
+
+  if (descriptions.length > paths.length || (descriptions.length > 0 && descriptions.length !== paths.length)) {
+    throw new Error("Each inline image needs one --image-description.");
+  }
+
+  if (mode === "generate" && paths.length > 0 && descriptions.length !== paths.length) {
+    throw new Error("Each inline image in generate mode needs --image-description.");
+  }
+
+  return paths.map((imagePath, index) => {
+    const description = descriptions[index]?.trim();
+    if (descriptions.length > 0 && !description) {
+      throw new Error("Image description must be a non-empty string.");
+    }
+
+    return {
+      id: `image-${index + 1}`,
+      path: imagePath,
+      ...(description ? { description } : {}),
+    };
+  });
+}
+
+function imagePrompts(images: readonly InlineImage[]): InlineImagePrompt[] {
+  return images.map((image) => ({
+    id: image.id,
+    ...(image.description ? { description: image.description } : {}),
+  }));
+}
+
 export function parseCli(argv: string[]): CliRun {
   if (!argv.includes("--mode")) {
+    if (flagValues(argv, "image").length > 0 || flagValues(argv, "image-description").length > 0) {
+      throw new Error("Inline images require --mode existing or --mode generate.");
+    }
     return { prompt: promptWithoutRunFlags(argv), target: readTarget(argv), coverPath: readCover(argv) };
   }
 
@@ -293,6 +393,7 @@ export function parseCli(argv: string[]): CliRun {
   const context = flagValue(argv, "context");
   const target = readTarget(argv);
   const coverPath = readCover(argv);
+  const images = mode === "existing" || mode === "generate" ? readInlineImages(argv, mode) : [];
 
   if (mode === "existing") {
     rejectUnknownFlags(argv, EXISTING_FLAGS);
@@ -309,7 +410,11 @@ export function parseCli(argv: string[]): CliRun {
       context,
       category: flagValue(argv, "category"),
     });
-    return { prompt: modelPrompt(request), request, target, coverPath };
+    const prompts = imagePrompts(images);
+    if (prompts.length > 0) {
+      request.images = prompts;
+    }
+    return { prompt: modelPrompt(request), request, target, coverPath, ...(images.length > 0 ? { images } : {}) };
   }
 
   if (mode === "generate") {
@@ -326,7 +431,11 @@ export function parseCli(argv: string[]): CliRun {
       length: flagValue(argv, "length"),
       category: flagValue(argv, "category"),
     });
-    return { prompt: modelPrompt(request), request, target, coverPath };
+    const prompts = imagePrompts(images);
+    if (prompts.length > 0) {
+      request.images = prompts;
+    }
+    return { prompt: modelPrompt(request), request, target, coverPath, ...(images.length > 0 ? { images } : {}) };
   }
 
   throw new Error("Set mode to existing or generate.");

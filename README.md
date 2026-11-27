@@ -1,4 +1,4 @@
-# Agentic Publishing Lab — Step 6A
+# Agentic Publishing Lab — Step 6B
 
 A minimal Node.js and TypeScript program that shows function calling with the Responses API. It uses the official OpenAI SDK. Set `OPENAI_BASE_URL` to point that same client at OpenRouter.
 
@@ -174,6 +174,21 @@ npm start -- --target mock --mode existing --file article.md --instructions "Pro
 npm start -- --target live --mode existing --file article.md --instructions "Propose a title, slug, and summary." --cover cover.webp
 ```
 
+### Inline images
+
+`--image <local-file>` can be repeated in both editorial modes, up to five images. The files are checked before any model call, with the same JPEG, PNG, and WebP rules as the cover. The program assigns `image-1`, `image-2`, and so on. The model never receives a filesystem path and has no tool that can choose one.
+
+An existing article can mark a spot with `![alt text](image:image-1)`. That placeholder is the only part of the Markdown that changes. In generate mode the model places every supplied image with that same syntax and writes the alt text from its `--image-description`. The destination is the assigned id. The model cannot invent a URL.
+
+The backend checks those references before any upload. A missing image, an unknown id, or an image that is not standard Markdown is rejected. After the Cloudinary URLs are substituted, the Markdown is checked again. Unresolved placeholders and unsafe URLs stop `createPost`. Japanese `<ruby>` and `<rt>` tags are accepted. Other HTML tags are not.
+
+Mock mode does not upload inline images. A live run uploads only the images the finished article references, and only after validation and the remote slug check. Each file is uploaded once, into `alex-blog/agentic-lab`. An upload or `createPost` that does not finish is reported, including assets already stored. Those assets are not deleted and the upload is not retried.
+
+```bash
+npm start -- --target mock --mode existing --file article.md --instructions "Propose a title, slug, and summary." --image photos/beta.png
+npm start -- --target live --mode generate --prompt "Write about Beta the cat." --length short --category CATS --image photos/beta.png --image-description "Beta asleep on the keyboard"
+```
+
 Each request sets `parallel_tool_calls` to false, so the model is asked for one tool call. If a completed response still contains several function calls, the backend runs them in that order and returns each result with its own `call_id`. An incomplete response does not run any of them. The last of the five model calls does not run them either.
 
 SDK retries are off (`maxRetries: 0`). Existing-article mode, and a run that is not an editorial generate request, caps each response at 512 output tokens. Generate-article mode uses 2048, 4096, or 8192 output tokens according to the length preset above. The process logs the limit it actually sends as `[api] max_output_tokens=...`. The loop stops after five model calls. If the fifth response is still a tool call, that call is logged and the tool is not executed, because sending the result would take a sixth model call. A response with status `incomplete` is also not used for tool execution. The terminal prints that status and the provider's reason, and the same fields are on the experiment result. Input and output tokens are logged for every response.
@@ -293,6 +308,27 @@ The article was generated in generate mode, category `CODE`, 189 words. Article 
 | Validation | passed |
 | Cover | visible in the blog editor |
 
+## Live inline image integration
+
+This is the first successful manual run that stored a generated draft with an inline image. It is an observation from that run, not a reliability benchmark. `--target mock` remains the default. This run set `--target live`.
+
+The article was generated in generate mode, category `CODE`, 168 words. Article validation passed. The model chose where to place the inline image. The backend replaced that image id with the Cloudinary URL. The persisted Markdown was confirmed in the existing blog editor. The agent did not publish the draft.
+
+| | |
+|---|---|
+| Mode | generate |
+| Target | live |
+| Slug | beta-zero-trust-lab |
+| Category | CODE |
+| Word count | 168 |
+| API calls | 4 |
+| Input tokens | 6536 |
+| Output tokens | 798 |
+| Validation | passed |
+| Inline image | placed by the model |
+| URL substitution | backend |
+| Persisted Markdown | confirmed in the blog editor |
+
 ## Tests
 
 ```bash
@@ -304,4 +340,4 @@ npm run typecheck
 
 ## Stop
 
-This repository stops at Step 6A. Mock runs keep drafts in memory and do not upload covers. Live runs can store a validated draft, with an optional cover URL. The agent cannot publish.
+This repository stops at Step 6B. Mock runs keep drafts in memory and do not upload images. Live runs can store a validated draft, with an optional cover URL and optional inline image URLs. The agent cannot publish.

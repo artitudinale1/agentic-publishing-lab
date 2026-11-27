@@ -4,7 +4,8 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import OpenAI from "openai";
 import { createBlogClient, persistValidatedDraft, readBlogConfig } from "./blog";
-import { createCloudinaryUploader, inspectCoverFile, readCloudinaryConfig } from "./cover";
+import { createCloudinaryUploader, createInlineImageUploader, inspectCoverFile, readCloudinaryConfig } from "./cover";
+import { prepareInlineImages } from "./images";
 import { openAIClientOptions, readConfig } from "./config";
 import { parseCli, type CliRun } from "./editorial";
 import { formatRunOutput, runExperiment } from "./experiment";
@@ -85,10 +86,13 @@ async function main(): Promise<void> {
   if (run.coverPath) {
     inspectCoverFile(run.coverPath);
   }
+  prepareInlineImages(run.images ?? [], run.request?.mode === "existing" ? run.request.body : undefined, run.request?.mode);
 
   const blogConfig = run.target === "live" ? readBlogConfig(process.env) : undefined;
   const cloudinaryConfig =
-    run.target === "live" && run.coverPath ? readCloudinaryConfig(process.env) : undefined;
+    run.target === "live" && (run.coverPath || (run.images && run.images.length > 0))
+      ? readCloudinaryConfig(process.env)
+      : undefined;
   const config = readConfig(process.env);
   const client = new OpenAI(openAIClientOptions(config));
 
@@ -106,9 +110,14 @@ async function main(): Promise<void> {
   if (run.coverPath) {
     console.log(`[config] cover=${basename(run.coverPath)}`);
   }
+  if (run.images && run.images.length > 0) {
+    console.log(`[config] inline=${run.images.map((image) => image.id).join(",")}`);
+  }
 
   const blog = blogConfig ? createBlogClient(blogConfig) : undefined;
-  const uploadCover = cloudinaryConfig ? createCloudinaryUploader(cloudinaryConfig) : undefined;
+  const uploadCover = cloudinaryConfig && run.coverPath ? createCloudinaryUploader(cloudinaryConfig) : undefined;
+  const uploadInline =
+    cloudinaryConfig && run.images && run.images.length > 0 ? createInlineImageUploader(cloudinaryConfig) : undefined;
 
   const result = await runExperiment({
     client,
@@ -132,6 +141,8 @@ async function main(): Promise<void> {
     client: blog,
     coverPath: run.coverPath,
     uploadCover,
+    images: run.images,
+    uploadInline,
   });
 }
 

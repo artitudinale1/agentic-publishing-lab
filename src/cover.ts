@@ -51,14 +51,14 @@ export function readCloudinaryConfig(env: NodeJS.ProcessEnv): CloudinaryConfig {
 }
 
 /** Read only the file the user named. The model never supplies this path. */
-export function inspectCoverFile(filePath: string): { path: string; mediaType: CoverMediaType } {
+export function inspectCoverFile(filePath: string, label = "Cover image"): { path: string; mediaType: CoverMediaType } {
   let size = 0;
   let header = Buffer.alloc(0);
 
   try {
     const stat = statSync(filePath);
     if (!stat.isFile()) {
-      throw new Error("Cover image must be a file.");
+      throw new Error(`${label} must be a file.`);
     }
     size = stat.size;
     const fd = openSync(filePath, "r");
@@ -70,22 +70,22 @@ export function inspectCoverFile(filePath: string): { path: string; mediaType: C
       closeSync(fd);
     }
   } catch (error) {
-    if (error instanceof Error && error.message === "Cover image must be a file.") {
+    if (error instanceof Error && error.message === `${label} must be a file.`) {
       throw error;
     }
-    throw new Error("Cover image could not be read.");
+    throw new Error(`${label} could not be read.`);
   }
 
-  return { path: filePath, mediaType: classifyCover(header, size, extname(filePath)) };
+  return { path: filePath, mediaType: classifyCover(header, size, extname(filePath), label) };
 }
 
-export function classifyCover(header: Buffer, size: number, extension: string): CoverMediaType {
+export function classifyCover(header: Buffer, size: number, extension: string, label = "Cover image"): CoverMediaType {
   if (size <= 0) {
-    throw new Error("Cover image is empty.");
+    throw new Error(`${label} is empty.`);
   }
 
   if (size > MAX_COVER_BYTES) {
-    throw new Error("Cover image must be 5 MB or smaller.");
+    throw new Error(`${label} must be 5 MB or smaller.`);
   }
 
   const detected = detectImage(header);
@@ -100,16 +100,11 @@ export function classifyCover(header: Buffer, size: number, extension: string): 
     return detected;
   }
 
-  throw new Error("Cover image must be a JPEG, PNG, or WebP file.");
+  throw new Error(`${label} must be a JPEG, PNG, or WebP file.`);
 }
 
 export function createCloudinaryUploader(config: CloudinaryConfig, sdk?: CloudinarySdk): CoverUploader {
-  const client = sdk ?? {
-    config: (options) => {
-      cloudinary.config(options);
-    },
-    upload: (file, options) => cloudinary.uploader.upload(file, options),
-  };
+  const client = sdk ?? defaultCloudinarySdk();
   let attempted = false;
 
   return async (filePath: string) => {
@@ -117,33 +112,67 @@ export function createCloudinaryUploader(config: CloudinaryConfig, sdk?: Cloudin
       return { status: "failed", message: "Cover upload was not retried." };
     }
     attempted = true;
-    client.config({
-      cloud_name: config.cloudName,
-      api_key: config.apiKey,
-      api_secret: config.apiSecret,
-      secure: true,
-    });
-
-    try {
-      const result = await client.upload(filePath, {
-        folder: COVER_FOLDER,
-        resource_type: "image",
-        overwrite: false,
-        unique_filename: true,
-        timeout: 60_000,
-      });
-      if (typeof result.secure_url === "string" && result.secure_url.startsWith("https://")) {
-        return { status: "uploaded", secureUrl: result.secure_url };
-      }
-      return {
-        status: "uncertain",
-        message:
-          "The cover upload did not return a secure URL. An asset may have been stored in alex-blog/agentic-lab and was not deleted. The upload was not retried.",
-      };
-    } catch (error) {
-      return classifyUploadError(error);
-    }
+    return uploadAsset(client, config, filePath, "cover");
   };
+}
+
+/** One attempt per file. A later call for the same path does not upload again. */
+export function createInlineImageUploader(config: CloudinaryConfig, sdk?: CloudinarySdk): CoverUploader {
+  const client = sdk ?? defaultCloudinarySdk();
+  const attempted = new Set<string>();
+
+  return async (filePath: string) => {
+    if (attempted.has(filePath)) {
+      return { status: "failed", message: "Inline image upload was not retried." };
+    }
+    attempted.add(filePath);
+    return uploadAsset(client, config, filePath, "inline");
+  };
+}
+
+function defaultCloudinarySdk(): CloudinarySdk {
+  return {
+    config: (options) => {
+      cloudinary.config(options);
+    },
+    upload: (file, options) => cloudinary.uploader.upload(file, options),
+  };
+}
+
+async function uploadAsset(
+  client: CloudinarySdk,
+  config: CloudinaryConfig,
+  filePath: string,
+  kind: "cover" | "inline",
+): Promise<CoverUploadResult> {
+  client.config({
+    cloud_name: config.cloudName,
+    api_key: config.apiKey,
+    api_secret: config.apiSecret,
+    secure: true,
+  });
+
+  try {
+    const result = await client.upload(filePath, {
+      folder: COVER_FOLDER,
+      resource_type: "image",
+      overwrite: false,
+      unique_filename: true,
+      timeout: 60_000,
+    });
+    if (typeof result.secure_url === "string" && result.secure_url.startsWith("https://")) {
+      return { status: "uploaded", secureUrl: result.secure_url };
+    }
+    return {
+      status: "uncertain",
+      message:
+        kind === "cover"
+          ? "The cover upload did not return a secure URL. An asset may have been stored in alex-blog/agentic-lab and was not deleted. The upload was not retried."
+          : "The inline image upload did not return a secure URL. An asset may have been stored in alex-blog/agentic-lab and was not deleted. The upload was not retried.",
+    };
+  } catch (error) {
+    return classifyUploadError(error, kind);
+  }
 }
 
 function detectImage(header: Buffer): CoverMediaType | undefined {
@@ -173,21 +202,21 @@ function detectImage(header: Buffer): CoverMediaType | undefined {
   return undefined;
 }
 
-function classifyUploadError(error: unknown): CoverUploadResult {
+function classifyUploadError(error: unknown, kind: "cover" | "inline"): CoverUploadResult {
   const httpCode =
     error !== null && typeof error === "object" && "http_code" in error
       ? Number((error as { http_code: unknown }).http_code)
       : undefined;
   const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
   const rejected = httpCode !== undefined && !Number.isNaN(httpCode) && httpCode >= 400 && httpCode < 500 && httpCode !== 408;
+  const label = kind === "cover" ? "Cover" : "Inline image";
 
   if (rejected && !timedOut) {
-    return { status: "failed", message: `Cover upload failed (HTTP ${httpCode}). The upload was not retried.` };
+    return { status: "failed", message: `${label} upload failed (HTTP ${httpCode}). The upload was not retried.` };
   }
 
   return {
     status: "uncertain",
-    message:
-      "The cover upload did not finish. An asset may have been stored in alex-blog/agentic-lab and was not deleted. The upload was not retried.",
+    message: `The ${kind === "cover" ? "cover" : "inline image"} upload did not finish. An asset may have been stored in alex-blog/agentic-lab and was not deleted. The upload was not retried.`,
   };
 }

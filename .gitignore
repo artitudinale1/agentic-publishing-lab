@@ -12,3 +12,9 @@ credentials.json
 *.log
 article.md
 src/beta.jpg
+src/beta2.jpg
+src/*.jpg
+src/*.jpeg
+src/*.png
+src/*.webp
+src/*.gif
