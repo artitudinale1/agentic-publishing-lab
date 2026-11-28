@@ -5,6 +5,12 @@ import {
   type ArticleCategory,
 } from "./articles.js";
 import {
+  BLOG_EXCERPT_MAX_LENGTH,
+  BLOG_MARKDOWN_MAX_LENGTH,
+  BLOG_SLUG_MAX_LENGTH,
+  BLOG_TITLE_MAX_LENGTH,
+} from "./blog-limits.js";
+import {
   ARTICLE_LENGTHS,
   countWords,
   resolveArticleLength,
@@ -12,6 +18,14 @@ import {
 } from "./editorial.js";
 
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+export {
+  BLOG_EXCERPT_MAX_LENGTH,
+  BLOG_FIELD_LIMITS,
+  BLOG_MARKDOWN_MAX_LENGTH,
+  BLOG_SLUG_MAX_LENGTH,
+  BLOG_TITLE_MAX_LENGTH,
+} from "./blog-limits.js";
 
 export type ValidationIssue = {
   code:
@@ -24,11 +38,17 @@ export type ValidationIssue = {
     | "category_mismatch"
     | "body_changed"
     | "too_short"
-    | "too_long";
+    | "too_long"
+    | "title_too_long"
+    | "slug_too_long"
+    | "excerpt_too_long"
+    | "markdown_too_long";
   message: string;
   wordCount?: number;
   minWords?: number;
   maxWords?: number;
+  length?: number;
+  maxLength?: number;
 };
 
 export type ValidationSuccess = {
@@ -95,6 +115,8 @@ export function validateStoredArticle(
     });
   }
 
+  issues.push(...blogFieldIssues(article));
+
   if (request?.mode === "generate" && article.body.trim() !== "") {
     const preset = ARTICLE_LENGTHS[resolveArticleLength(request.length)];
     const wordCount = countWords(article.body);
@@ -144,4 +166,57 @@ export function validateStoredArticle(
       wordCount: countWords(article.body),
     },
   };
+}
+
+/**
+ * The same character limits createPost enforces.
+ * Title, slug, and excerpt use the trimmed length. Markdown uses the exact length.
+ */
+export function blogFieldIssues(article: {
+  title: string;
+  slug: string;
+  summary: string;
+  body: string;
+}): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const titleLength = article.title.trim().length;
+  if (titleLength > BLOG_TITLE_MAX_LENGTH) {
+    issues.push({
+      code: "title_too_long",
+      message: `Title has ${titleLength} characters, which exceeds the maximum of ${BLOG_TITLE_MAX_LENGTH}.`,
+      length: titleLength,
+      maxLength: BLOG_TITLE_MAX_LENGTH,
+    });
+  }
+
+  const slugLength = article.slug.trim().length;
+  if (slugLength > BLOG_SLUG_MAX_LENGTH) {
+    issues.push({
+      code: "slug_too_long",
+      message: `Slug has ${slugLength} characters, which exceeds the maximum of ${BLOG_SLUG_MAX_LENGTH}.`,
+      length: slugLength,
+      maxLength: BLOG_SLUG_MAX_LENGTH,
+    });
+  }
+
+  const excerptLength = article.summary.trim().length;
+  if (excerptLength > BLOG_EXCERPT_MAX_LENGTH) {
+    issues.push({
+      code: "excerpt_too_long",
+      message: `Summary has ${excerptLength} characters, which exceeds the excerpt maximum of ${BLOG_EXCERPT_MAX_LENGTH}.`,
+      length: excerptLength,
+      maxLength: BLOG_EXCERPT_MAX_LENGTH,
+    });
+  }
+
+  if (article.body.length > BLOG_MARKDOWN_MAX_LENGTH) {
+    issues.push({
+      code: "markdown_too_long",
+      message: `Markdown has ${article.body.length} characters, which exceeds the maximum of ${BLOG_MARKDOWN_MAX_LENGTH}.`,
+      length: article.body.length,
+      maxLength: BLOG_MARKDOWN_MAX_LENGTH,
+    });
+  }
+
+  return issues;
 }

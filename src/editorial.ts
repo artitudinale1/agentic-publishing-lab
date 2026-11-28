@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isArticleCategory, type ArticleCategory } from "./articles.js";
+import { BLOG_FIELD_LIMITS } from "./blog-limits.js";
 import { MAX_INLINE_IMAGES, type InlineImage, type InlineImagePrompt } from "./images.js";
 
 /**
@@ -245,6 +246,8 @@ export function instructionsFor(request: EditorialRequest): string {
     "Saving a draft does not require approval.",
     "You cannot approve or publish. Approval and publication happen outside this workflow.",
     "When you are finished, reply with a short summary of what you did. Do not repeat the article body.",
+    BLOG_FIELD_LIMITS,
+    "If a tool reports that the title, slug, summary, or Markdown is too long, submit a shorter value.",
     request.category
       ? `The category is ${request.category}. createDraft must use that category.`
       : "createDraft must use a category of CODE, JAPANESE, CATS, or COOKING.",

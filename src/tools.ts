@@ -17,7 +17,14 @@ import {
   type EditorialRequest,
 } from "./editorial.js";
 import { validateArticleMarkdown } from "./images.js";
-import { validateStoredArticle, type ValidationIssue, type ValidationSuccess } from "./validation.js";
+import {
+  BLOG_EXCERPT_MAX_LENGTH,
+  BLOG_FIELD_LIMITS,
+  BLOG_MARKDOWN_MAX_LENGTH,
+  BLOG_SLUG_MAX_LENGTH,
+  BLOG_TITLE_MAX_LENGTH,
+} from "./blog-limits.js";
+import { blogFieldIssues, validateStoredArticle, type ValidationIssue, type ValidationSuccess } from "./validation.js";
 
 /**
  * Strict Responses API tools.
@@ -53,7 +60,7 @@ const validateArticleTool: OpenAI.Responses.Tool = {
   type: "function",
   name: "validateArticle",
   description:
-    "Check a saved draft by slug. Confirms the required fields, slug format, category, supplied-body preservation, and generated word limits. Saving a draft does not require this call. This tool does not approve or publish.",
+    `Check a saved draft by slug. Confirms the required fields, slug format, category, supplied-body preservation, generated word limits, and the blog field limits. ${BLOG_FIELD_LIMITS} Saving a draft does not require this call. This tool does not approve or publish.`,
   parameters: {
     type: "object",
     properties: {
@@ -69,13 +76,16 @@ const updateDraftTool: OpenAI.Responses.Tool = {
   type: "function",
   name: "updateDraft",
   description:
-    "Replace the title and summary of an existing draft. The backend rejects updates to missing or published articles. This tool cannot change the article body.",
+    `Replace the title and summary of an existing draft. ${BLOG_FIELD_LIMITS} The backend rejects updates to missing or published articles. This tool cannot change the article body.`,
   parameters: {
     type: "object",
     properties: {
       slug: { type: "string", description: "Slug of the draft to change." },
-      title: { type: "string", description: "Replacement title." },
-      summary: { type: "string", description: "Replacement summary." },
+      title: { type: "string", description: `Replacement title. At most ${BLOG_TITLE_MAX_LENGTH} characters.` },
+      summary: {
+        type: "string",
+        description: `Replacement summary, stored as the excerpt. At most ${BLOG_EXCERPT_MAX_LENGTH} characters.`,
+      },
     },
     required: ["slug", "title", "summary"],
     additionalProperties: false,
@@ -89,13 +99,16 @@ function createDraftTool(acceptsBody: boolean): OpenAI.Responses.Tool {
       type: "function",
       name: "createDraft",
       description:
-        "Create a draft. Pass slug, title, and summary only. The backend attaches the article body and rejects a body argument. It also rejects a slug that already exists.",
+        `Create a draft. Pass slug, title, and summary only. ${BLOG_FIELD_LIMITS} The backend attaches the article body and rejects a body argument. It also rejects a slug that already exists.`,
       parameters: {
         type: "object",
         properties: {
-          slug: { type: "string", description: "New article slug." },
-          title: { type: "string", description: "Draft title." },
-          summary: { type: "string", description: "Draft summary." },
+          slug: { type: "string", description: `New article slug. At most ${BLOG_SLUG_MAX_LENGTH} characters.` },
+          title: { type: "string", description: `Draft title. At most ${BLOG_TITLE_MAX_LENGTH} characters.` },
+          summary: {
+            type: "string",
+            description: `Draft summary, stored as the excerpt. At most ${BLOG_EXCERPT_MAX_LENGTH} characters.`,
+          },
           category: CATEGORY_SCHEMA,
         },
         required: ["slug", "title", "summary", "category"],
@@ -109,14 +122,20 @@ function createDraftTool(acceptsBody: boolean): OpenAI.Responses.Tool {
     type: "function",
     name: "createDraft",
     description:
-      "Create a draft from generated content. Include slug, title, summary, and the full article body. The backend stores the body only when every field is valid, and rejects a slug that already exists.",
+      `Create a draft from generated content. Include slug, title, summary, and the full article body. ${BLOG_FIELD_LIMITS} The backend stores the body only when every field is valid, and rejects a slug that already exists.`,
     parameters: {
       type: "object",
       properties: {
-        slug: { type: "string", description: "New article slug." },
-        title: { type: "string", description: "Draft title." },
-        summary: { type: "string", description: "Draft summary." },
-        body: { type: "string", description: "Full generated article body." },
+        slug: { type: "string", description: `New article slug. At most ${BLOG_SLUG_MAX_LENGTH} characters.` },
+        title: { type: "string", description: `Draft title. At most ${BLOG_TITLE_MAX_LENGTH} characters.` },
+        summary: {
+          type: "string",
+          description: `Draft summary, stored as the excerpt. At most ${BLOG_EXCERPT_MAX_LENGTH} characters.`,
+        },
+        body: {
+          type: "string",
+          description: `Full generated article body. At most ${BLOG_MARKDOWN_MAX_LENGTH} characters.`,
+        },
         category: CATEGORY_SCHEMA,
       },
       required: ["slug", "title", "summary", "body", "category"],
@@ -303,6 +322,20 @@ export function runToolCall(
       return { ok: false, error: `Category must be ${request.category}.` };
     }
 
+    const fieldIssues = blogFieldIssues({
+      title: field(parsed.values, "title"),
+      slug: field(parsed.values, "slug"),
+      summary: field(parsed.values, "summary"),
+      body,
+    });
+    if (fieldIssues.length > 0) {
+      return {
+        ok: false,
+        error: "Article failed validation.",
+        validation: { code: "invalid_article", issues: fieldIssues },
+      };
+    }
+
     const created = createDraft(
       catalog,
       field(parsed.values, "slug"),
@@ -323,6 +356,25 @@ export function runToolCall(
     if (!parsed.ok) {
       return parsed;
     }
+
+    const slug = field(parsed.values, "slug");
+    const current = catalog.find((entry) => entry.slug === slug);
+    if (current?.status === "draft") {
+      const fieldIssues = blogFieldIssues({
+        title: field(parsed.values, "title"),
+        slug,
+        summary: field(parsed.values, "summary"),
+        body: current.body,
+      }).filter((issue) => issue.code === "title_too_long" || issue.code === "excerpt_too_long");
+      if (fieldIssues.length > 0) {
+        return {
+          ok: false,
+          error: "Article failed validation.",
+          validation: { code: "invalid_article", issues: fieldIssues },
+        };
+      }
+    }
+
     const updated = updateDraft(
       catalog,
       field(parsed.values, "slug"),

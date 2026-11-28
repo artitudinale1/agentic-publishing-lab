@@ -3,7 +3,7 @@ import type { CoverUploader } from "./cover.js";
 import { imageDataUri, inspectCoverBytes, inspectCoverFile } from "./cover.js";
 import type { EditorialRequest, RunTarget } from "./editorial.js";
 import { replaceImagePlaceholders, validateArticleMarkdown, validateResolvedMarkdown, type InlineImage } from "./images.js";
-import { validateStoredArticle } from "./validation.js";
+import { blogFieldIssues, validateStoredArticle } from "./validation.js";
 
 /** One GraphQL request. Mutations are not retried. */
 export const BLOG_REQUEST_TIMEOUT_MS = 60_000;
@@ -314,11 +314,13 @@ export async function persistValidatedDraft(options: {
 
   const validation = validateStoredArticle(options.draft, options.request);
   if (!validation.ok) {
+    const details = validation.validation?.issues.map((issue) => issue.message).join(" ") ?? "";
+    const message = details ? `${validation.error} ${details}` : validation.error;
     const report = {
       persisted: false,
-      message: validation.error,
+      message,
     };
-    log(`[blog] validation failed: ${validation.error}`);
+    log(`[blog] validation failed: ${message}`);
     return report;
   }
 
@@ -438,6 +440,16 @@ export async function persistValidatedDraft(options: {
   }
 
   const remoteDraft = remoteBody === options.draft.body ? options.draft : { ...options.draft, body: remoteBody };
+  const payloadIssues = blogFieldIssues(remoteDraft);
+  if (payloadIssues.length > 0) {
+    const report = {
+      persisted: false,
+      message: orphanMessage(payloadIssues.map((issue) => issue.message).join(" "), coverImageUrl, uploadedInline),
+    };
+    log(`[blog] ${report.message}`);
+    return report;
+  }
+
   const created = await options.client.createDraft(remoteDraft, coverImageUrl);
   if (created.status === "created") {
     const report = {

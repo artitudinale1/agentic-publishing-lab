@@ -132,6 +132,8 @@ Published articles still cannot be updated. Duplicate slugs are still rejected. 
 
 `validateArticle` checks a saved draft. It requires a title, slug, summary, and body. The slug must be lowercase letters, numbers, and single hyphens. The category must be `CODE`, `JAPANESE`, `CATS`, or `COOKING`. In existing-article mode the stored body must still match the supplied file. In generate-article mode the word count must fall inside the selected length preset. The tool result does not include the body.
 
+The blog API also limits a title to 160 characters, a slug to 80, an excerpt to 300, and Markdown to 100000. Title, slug, and excerpt are measured after trimming. Markdown is measured exactly, including surrounding whitespace. `createDraft` and `updateDraft` reject a value over those limits, leave the catalog unchanged, and return `validation.issues` with the field, the length, and the maximum. The text is not shortened. The editorial instructions and tool descriptions state the same limits, so the model can submit a shorter value within the five-call budget.
+
 Saving a draft does not require validation or approval. A failed check leaves the draft in memory and clears any earlier validation.
 
 Pass `--category` when the editorial request should fix the category. `createDraft` must use that same value.
@@ -152,7 +154,7 @@ Publication is not available to the agent. Review and publication stay in the bl
 
 `--target live` checks `BLOG_API_URL` and `AGENT_API_SECRET` before any model call. A missing value stops the run. The secret is sent only as `X-Agent-Authorization: Bearer <AGENT_API_SECRET>`.
 
-After a completed run, the backend validates the final draft again. Invalid drafts and drafts from an unfinished run are not sent. Live mode then looks up the slug with `editorPosts`, including drafts, one page at a time. A failed or unfinished lookup is not treated as a missing article, and `createPost` is not called. An existing remote slug is left unchanged. A new draft is stored with `createPost`, the Markdown is sent unchanged, and the returned status must be `DRAFT`.
+After a completed run, the backend validates the final draft again, including the blog field limits. Invalid drafts and drafts from an unfinished run are not sent, and no image is uploaded. Live mode then looks up the slug with `editorPosts`, including drafts, one page at a time. A failed or unfinished lookup is not treated as a missing article, and `createPost` is not called. An existing remote slug is left unchanged. A new draft is stored with `createPost`, the Markdown is sent unchanged, and the returned status must be `DRAFT`.
 
 Each blog request has a 60 second timeout. A lookup may be tried once more after a network failure or a Render cold-start response. `createPost` is never retried. If that write does not finish, the result says the remote draft may or may not exist.
 
@@ -180,7 +182,7 @@ npm start -- --target live --mode existing --file article.md --instructions "Pro
 
 An existing article can mark a spot with `![alt text](image:image-1)`. That placeholder is the only part of the Markdown that changes. In generate mode the model places every supplied image with that same syntax and writes the alt text from its `--image-description`. The destination is the assigned id. The model cannot invent a URL.
 
-The backend checks those references before any upload. A missing image, an unknown id, or an image that is not standard Markdown is rejected. After the Cloudinary URLs are substituted, the Markdown is checked again. Unresolved placeholders and unsafe URLs stop `createPost`. Japanese `<ruby>` and `<rt>` tags are accepted. Other HTML tags are not.
+The backend checks those references before any upload. A missing image, an unknown id, or an image that is not standard Markdown is rejected. Title, slug, excerpt, and Markdown length are checked before any upload as well. After the Cloudinary URLs are substituted, the Markdown and the rest of the payload are checked again. Unresolved placeholders, unsafe URLs, and a payload over the blog limits stop `createPost`. Japanese `<ruby>` and `<rt>` tags are accepted. Other HTML tags are not.
 
 Mock mode does not upload inline images. A live run uploads only the images the finished article references, and only after validation and the remote slug check. Each file is uploaded once, into `alex-blog/agentic-lab`. An upload or `createPost` that does not finish is reported, including assets already stored. Those assets are not deleted and the upload is not retried.
 

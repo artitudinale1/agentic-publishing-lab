@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { createCatalog, createDraft, type Article } from "../src/articles";
+import { BLOG_EXCERPT_MAX_LENGTH, BLOG_MARKDOWN_MAX_LENGTH } from "../src/blog-limits";
 import { createBlogClient, persistValidatedDraft, type RemotePost } from "../src/blog";
 import {
   COVER_FOLDER,
@@ -446,5 +447,85 @@ describe("cover persistence", () => {
     assert.match(found.message, /not uploaded/);
     assert.match(unfinished.message, /did not finish/);
     assert.equal(uploads, 0);
+  });
+
+  it("does not upload images when the excerpt is too long", async () => {
+    const summary = "s".repeat(BLOG_EXCERPT_MAX_LENGTH + 1);
+    const article = localDraft(body);
+    article.summary = summary;
+    let uploads = 0;
+    const report = await persistValidatedDraft({
+      target: "live",
+      draft: article,
+      request: existing,
+      status: "completed",
+      stoppedAtCallLimit: false,
+      client: createBlogClient({
+        url: "https://blog.example/graphql",
+        secret,
+        fetch: async () => {
+          throw new Error("Blog API was called.");
+        },
+        timeoutMs: 50,
+      }),
+      coverBytes: new Uint8Array([1]),
+      coverFilename: "cat.png",
+      uploadCover: async () => {
+        uploads += 1;
+        return { status: "uploaded", secureUrl };
+      },
+      images: [{ id: "image-1", filename: "inline.png", bytes: new Uint8Array([1]) }],
+      uploadInline: async () => {
+        uploads += 1;
+        return { status: "uploaded", secureUrl };
+      },
+      log: () => undefined,
+    });
+
+    assert.equal(uploads, 0);
+    assert.equal(report.persisted, false);
+    assert.match(report.message, /excerpt maximum of 300/);
+    assert.equal(article.summary, summary);
+  });
+
+  it("checks the resolved Markdown again and does not call createPost when it is too long", async () => {
+    const image = "![cat](image:image-1)";
+    const markdown = image + "a".repeat(BLOG_MARKDOWN_MAX_LENGTH - image.length);
+    const article = localDraft(markdown);
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+    let mutations = 0;
+    let uploads = 0;
+    const report = await persistValidatedDraft({
+      target: "live",
+      draft: article,
+      request: { mode: "existing", instructions: "Keep the file.", body: markdown, category: "CODE" },
+      status: "completed",
+      stoppedAtCallLimit: false,
+      client: createBlogClient({
+        url: "https://blog.example/graphql",
+        secret,
+        fetch: async (_input, init) => {
+          const payload = JSON.parse(String(init?.body)) as { query?: string };
+          if (payload.query?.includes("mutation")) {
+            mutations += 1;
+          }
+          return jsonResponse({ data: { editorPosts: [] } });
+        },
+        timeoutMs: 50,
+      }),
+      images: [{ id: "image-1", filename: "cat.png", bytes: png }],
+      uploadInline: async () => {
+        uploads += 1;
+        return { status: "uploaded", secureUrl };
+      },
+      log: () => undefined,
+    });
+
+    assert.equal(markdown.length, BLOG_MARKDOWN_MAX_LENGTH);
+    assert.equal(uploads, 1);
+    assert.equal(mutations, 0);
+    assert.equal(report.persisted, false);
+    assert.match(report.message, /exceeds the maximum of 100000/);
+    assert.match(report.message, /not deleted/);
   });
 });

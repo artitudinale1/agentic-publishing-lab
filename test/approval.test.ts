@@ -2,8 +2,15 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { approveDraft, rejectDraft } from "../src/approval";
 import { articleRevision, createCatalog, createDraft, findArticle, updateDraft } from "../src/articles";
+import {
+  BLOG_EXCERPT_MAX_LENGTH,
+  BLOG_FIELD_LIMITS,
+  BLOG_MARKDOWN_MAX_LENGTH,
+  BLOG_SLUG_MAX_LENGTH,
+  BLOG_TITLE_MAX_LENGTH,
+} from "../src/blog-limits";
+import { instructionsFor, type EditorialRequest } from "../src/editorial";
 import { articleTools, runToolCall, toolsFor } from "../src/tools";
-import type { EditorialRequest } from "../src/editorial";
 
 const request: EditorialRequest = {
   mode: "generate",
@@ -261,5 +268,156 @@ describe("article validation and human approval", () => {
     assert.equal(toolNames(articleTools).includes("publishDraft"), false);
     assert.equal(toolNames(toolsFor(request)).includes("validateArticle"), true);
     assert.equal(toolNames(toolsFor(request)).includes("publishDraft"), false);
+  });
+
+  it("accepts blog field limits at the boundary and rejects one character over", () => {
+    const existing = (body: string): EditorialRequest => ({
+      mode: "existing",
+      instructions: "Keep the file.",
+      body,
+      category: "CODE",
+    });
+    const title = "T".repeat(BLOG_TITLE_MAX_LENGTH);
+    const paddedTitle = ` ${title} `;
+    const slug = "a".repeat(BLOG_SLUG_MAX_LENGTH);
+    const summary = ` ${"s".repeat(BLOG_EXCERPT_MAX_LENGTH)} `;
+    const markdown = "m".repeat(BLOG_MARKDOWN_MAX_LENGTH);
+    const catalog = createCatalog();
+    const accepted = runToolCall(
+      catalog,
+      "createDraft",
+      JSON.stringify({ slug, title: paddedTitle, summary, category: "CODE" }),
+      existing(markdown),
+    );
+
+    assert.equal(accepted.ok, true);
+    const stored = catalog.find((entry) => entry.slug === slug);
+    assert.ok(stored);
+    assert.equal(stored.title, paddedTitle);
+    assert.equal(stored.summary, summary);
+    assert.equal(stored.body, markdown);
+    const validated = runToolCall(catalog, "validateArticle", JSON.stringify({ slug }), existing(markdown));
+    assert.equal(validated.ok, true);
+
+    const cases = [
+      {
+        slug: "title-over",
+        title: "T".repeat(BLOG_TITLE_MAX_LENGTH + 1),
+        summary: "A summary.",
+        body: "Body.\n",
+        code: "title_too_long",
+        length: BLOG_TITLE_MAX_LENGTH + 1,
+        maxLength: BLOG_TITLE_MAX_LENGTH,
+      },
+      {
+        slug: "b".repeat(BLOG_SLUG_MAX_LENGTH + 1),
+        title: "Title",
+        summary: "A summary.",
+        body: "Body.\n",
+        code: "slug_too_long",
+        length: BLOG_SLUG_MAX_LENGTH + 1,
+        maxLength: BLOG_SLUG_MAX_LENGTH,
+      },
+      {
+        slug: "excerpt-over",
+        title: "Title",
+        summary: "s".repeat(BLOG_EXCERPT_MAX_LENGTH + 1),
+        body: "Body.\n",
+        code: "excerpt_too_long",
+        length: BLOG_EXCERPT_MAX_LENGTH + 1,
+        maxLength: BLOG_EXCERPT_MAX_LENGTH,
+      },
+      {
+        slug: "markdown-over",
+        title: "Title",
+        summary: "A summary.",
+        body: `${"m".repeat(BLOG_MARKDOWN_MAX_LENGTH)}\n`,
+        code: "markdown_too_long",
+        length: BLOG_MARKDOWN_MAX_LENGTH + 1,
+        maxLength: BLOG_MARKDOWN_MAX_LENGTH,
+      },
+    ];
+
+    for (const item of cases) {
+      const next = createCatalog();
+      const outcome = runToolCall(
+        next,
+        "createDraft",
+        JSON.stringify({
+          slug: item.slug,
+          title: item.title,
+          summary: item.summary,
+          category: "CODE",
+        }),
+        existing(item.body),
+      );
+      assert.equal(outcome.ok, false);
+      assert.equal(findArticle(next, item.slug).found, false);
+      if (outcome.ok || !outcome.validation || !("issues" in outcome.validation)) {
+        assert.fail("Expected structured field issues.");
+      }
+      assert.equal(outcome.validation.issues.length, 1);
+      assert.equal(outcome.validation.issues[0]?.code, item.code);
+      assert.equal(outcome.validation.issues[0]?.length, item.length);
+      assert.equal(outcome.validation.issues[0]?.maxLength, item.maxLength);
+    }
+
+    const both = createCatalog();
+    const combined = runToolCall(
+      both,
+      "createDraft",
+      JSON.stringify({
+        slug: "both-over",
+        title: "T".repeat(BLOG_TITLE_MAX_LENGTH + 1),
+        summary: "s".repeat(BLOG_EXCERPT_MAX_LENGTH + 1),
+        category: "CODE",
+      }),
+      existing("Body.\n"),
+    );
+    assert.equal(combined.ok, false);
+    if (combined.ok || !combined.validation || !("issues" in combined.validation)) {
+      assert.fail("Expected structured field issues.");
+    }
+    assert.deepEqual(
+      combined.validation.issues.map((issue) => issue.code),
+      ["title_too_long", "excerpt_too_long"],
+    );
+    assert.equal(findArticle(both, "both-over").found, false);
+
+    const revision = createCatalog();
+    createDraft(revision, "office-notes", "Office Notes", "A summary.", "Body.\n", "CODE");
+    const blocked = runToolCall(
+      revision,
+      "updateDraft",
+      JSON.stringify({
+        slug: "office-notes",
+        title: "Office Notes",
+        summary: "s".repeat(BLOG_EXCERPT_MAX_LENGTH + 1),
+      }),
+    );
+    assert.equal(blocked.ok, false);
+    if (blocked.ok || !blocked.validation || !("issues" in blocked.validation)) {
+      assert.fail("Expected structured field issues.");
+    }
+    assert.equal(blocked.validation.issues[0]?.code, "excerpt_too_long");
+    assert.equal(revision.find((entry) => entry.slug === "office-notes")?.summary, "A summary.");
+
+    const storedLong = createCatalog();
+    createDraft(storedLong, "long-excerpt", "Title", "s".repeat(BLOG_EXCERPT_MAX_LENGTH + 1), "Body.\n", "CODE");
+    const rejected = runToolCall(storedLong, "validateArticle", JSON.stringify({ slug: "long-excerpt" }));
+    assert.equal(rejected.ok, false);
+    if (rejected.ok || !rejected.validation || !("issues" in rejected.validation)) {
+      assert.fail("Expected structured field issues.");
+    }
+    assert.equal(rejected.validation.issues[0]?.code, "excerpt_too_long");
+    assert.equal(findArticle(storedLong, "long-excerpt").found, true);
+
+    const instructions = instructionsFor(existing("Body.\n"));
+    assert.ok(instructions.includes(BLOG_FIELD_LIMITS));
+    assert.match(instructions, /submit a shorter value/);
+    const createTool = toolsFor(existing("Body.\n")).find((tool) => "name" in tool && tool.name === "createDraft");
+    assert.equal(createTool && "description" in createTool && createTool.description?.includes(BLOG_FIELD_LIMITS), true);
+    const updateTool = toolsFor(existing("Body.\n")).find((tool) => "name" in tool && tool.name === "updateDraft");
+    assert.equal(updateTool && "description" in updateTool && updateTool.description?.includes("300"), true);
   });
 });
